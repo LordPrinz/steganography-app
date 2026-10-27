@@ -1,0 +1,35 @@
+{
+  "name": "steganography-app",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.4",
+  "engines": {
+    "bun": ">=1.4.4"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "prepare": "husky",
+    "dev": "bun run --filter '@stego/api' --filter '@stego/worker' --filter '@stego/web' dev",
+    "dev:api": "bun run --filter '@stego/api' dev",
+    "dev:web": "bun run --filter '@stego/web' dev",
+    "build": "bun run --filter '@stego/web' build",
+    "check": "biome check .",
+    "check:fix": "biome check --write .",
+    "typecheck": "tsc -p . && bun run --filter '*' typecheck",
+    "test": "bun test",
+    "infra:up": "docker compose -f infra/docker-compose.yml up -d",
+    "infra:down": "docker compose -f infra/docker-compose.yml down",
+    "db:new": "bun run --filter '@stego/db' new",
+    "db:migrate": "bun run --filter '@stego/db' migrate",
+    "gh:setup-project": "bun scripts/gh/setup-project.ts"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.3",
+    "@types/bun": "1.4.4",
+    "husky": "9.1.7",
+    "typescript": "6.0.3"
+  }
+}

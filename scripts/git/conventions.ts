@@ -1,0 +1,43 @@
+/** Shared naming rules for branches, commits and PR titles. */
+
+export const COMMIT_TYPES = [
+  "feat",
+  "fix",
+  "chore",
+  "docs",
+  "refactor",
+  "test",
+  "perf",
+  "ci",
+  "build",
+] as const;
+
+/** `ST-44-set-user-permissions` */
+export const BRANCH_PATTERN = /^ST-(\d+)-[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/** `[ST-44] chore: Set user permissions` (optional scope and `!` for breaking changes). */
+export const HEADER_PATTERN = new RegExp(
+  String.raw`^\[ST-\d+\] (?:${COMMIT_TYPES.join("|")})(?:\([a-z0-9-]+\))?!?: \S.{2,}$`,
+);
+
+/** Branches that never carry a ticket number. */
+export const UNTICKETED_BRANCHES = new Set(["main", "HEAD"]);
+
+/** Commits git generates itself; they are allowed without a ticket. */
+export const GENERATED_HEADER = /^(?:Merge |Revert "|fixup! |squash! |amend! )/;
+
+export function ticketFromBranch(branch: string): string | undefined {
+  const id = BRANCH_PATTERN.exec(branch)?.[1] ?? /^ST-(\d+)/i.exec(branch)?.[1];
+  return id ? `ST-${id}` : undefined;
+}
+
+export async function currentBranch(): Promise<string> {
+  // symbolic-ref also works before the first commit; it fails only on a detached HEAD.
+  const result = await Bun.$`git symbolic-ref --short HEAD`.quiet().nothrow();
+  return result.exitCode === 0 ? result.text().trim() : "HEAD";
+}
+
+export function fail(lines: string[]): never {
+  console.error(`\n✖ ${lines.join("\n  ")}\n`);
+  process.exit(1);
+}

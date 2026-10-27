@@ -1,0 +1,10 @@
+# Each area has an owner who is requested for review automatically.
+# Replace @LordPrinz with the teammate responsible for the area.
+*                       @LordPrinz
+/packages/stego-engine/ @LordPrinz
+/packages/image-io/     @LordPrinz
+/apps/api/              @LordPrinz
+/apps/worker/           @LordPrinz
+/packages/db/           @LordPrinz
+/apps/web/              @LordPrinz
+/.github/               @LordPrinz

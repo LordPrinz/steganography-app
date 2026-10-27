@@ -1,0 +1,19 @@
+{
+  "name": "@stego/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --env-file=../../.env --watch src/index.ts",
+    "start": "bun --env-file=../../.env src/index.ts",
+    "build": "bun build src/index.ts --compile --minify --sourcemap --outfile dist/api",
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@stego/contracts": "workspace:*",
+    "@stego/db": "workspace:*",
+    "@stego/engine": "workspace:*",
+    "@stego/image-io": "workspace:*",
+    "zod": "4.6.7"
+  }
+}
