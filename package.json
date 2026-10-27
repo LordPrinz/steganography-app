@@ -24,6 +24,8 @@
     "infra:down": "docker compose -f infra/docker-compose.yml down",
     "db:new": "bun run --filter '@stego/db' new",
     "db:migrate": "bun run --filter '@stego/db' migrate",
+    "gh:setup": "bun run gh:setup-repo && bun run gh:setup-project",
+    "gh:setup-repo": "bun scripts/gh/setup-repo.ts",
     "gh:setup-project": "bun scripts/gh/setup-project.ts"
   },
   "devDependencies": {
