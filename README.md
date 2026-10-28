@@ -4,6 +4,7 @@ Image steganography web app: hide and recover data using **LSB**, **DCT (Koch–
 
 - **Architecture & decisions:** [docs/DESIGN.md](docs/DESIGN.md)
 - **Workflow, roles & conventions:** [CONTRIBUTING.md](CONTRIBUTING.md)
+- **Wiki:** generated from these docs on every merge to `main` ([`wiki.yml`](.github/workflows/wiki.yml)); edit the files in this repository, not the wiki
 - **Board:** GitHub Projects → _Steganography App_
 
 ## Stack

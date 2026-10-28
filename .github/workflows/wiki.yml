@@ -1,0 +1,54 @@
+name: Wiki
+
+# Publishes README, CONTRIBUTING and docs/ to the repository wiki (see scripts/gh/wiki.ts).
+# The wiki is generated: edit the files in the repository, not the wiki pages.
+# GitHub creates the wiki's git repository only after its first page is saved in the UI;
+# until then the wiki checkout below fails with "repository not found".
+on:
+  push:
+    branches: [main]
+    paths:
+      - README.md
+      - CONTRIBUTING.md
+      - "docs/**"
+      - scripts/gh/wiki.ts
+      - .github/workflows/wiki.yml
+  workflow_dispatch:
+
+concurrency:
+  group: wiki
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    # Manual runs from other branches would publish unmerged docs.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      # Checked out last so the write token is on disk only while our own script runs.
+      - uses: actions/checkout@v5
+        with:
+          repository: ${{ github.repository }}.wiki
+          path: .wiki
+      - run: bun scripts/gh/wiki.ts .wiki
+      - name: Push
+        working-directory: .wiki
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Wiki is up to date."
+            exit 0
+          fi
+          git commit -m "Sync docs from ${GITHUB_SHA::7}"
+          git push
