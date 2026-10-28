@@ -20,7 +20,8 @@ const ADR_DIR = "docs/adr";
 const ADR_HEADING = "Architecture decision records";
 const ADR_ANCHOR = "Home#architecture-decision-records";
 
-const isAdr = (doc: Doc) => path.posix.dirname(doc.path) === ADR_DIR;
+const isAdr = (doc: Doc) =>
+  path.posix.dirname(doc.path) === ADR_DIR && /^\d+-/.test(path.posix.basename(doc.path));
 const title = (doc: Doc) =>
   /^# (.+)$/m.exec(doc.content)?.[1]?.trim() ?? path.basename(doc.path, ".md");
 /** ADR headings are numbered (`# 1. Monorepo on Bun`); the wiki shows the number separately. */
@@ -50,9 +51,9 @@ export function rewriteLinks(
       if (/^\s*(```|~~~)/.test(line)) inFence = !inFence;
       if (inFence) return line;
       return line.replace(
-        /(\]\()([^)\s]+)(\))/g,
+        /(!?\[[^\]]*\]\()([^)\s]+)((?:\s+"[^"]*")?\))/g,
         (_, open: string, target: string, close: string) =>
-          open + resolveLink(target, from, pages, repoUrl) + close,
+          open + resolveLink(target, from, pages, repoUrl, open.startsWith("!")) + close,
       );
     })
     .join("\n");
@@ -63,6 +64,7 @@ function resolveLink(
   from: string,
   pages: Map<string, string>,
   repoUrl: string,
+  image: boolean,
 ): string {
   if (/^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith("#")) return target;
   const [file = "", anchor] = target.split("#", 2);
@@ -74,7 +76,8 @@ function resolveLink(
   const page = pages.get(normalized);
   if (page) return page + suffix;
   if (normalized === ADR_DIR) return ADR_ANCHOR;
-  return `${repoUrl}/blob/main/${normalized}${suffix}`;
+  // A blob URL is an HTML page, so images need the raw file.
+  return `${repoUrl}/${image ? "raw" : "blob"}/main/${normalized}${suffix}`;
 }
 
 function adrIndex(adrs: Doc[], pages: Map<string, string>): string {
@@ -97,7 +100,7 @@ export function buildWiki(docs: Doc[], repoUrl: string): Page[] {
   const adrs = docs.filter(isAdr).sort((a, b) => a.path.localeCompare(b.path));
   const others = docs.filter((doc) => !isAdr(doc) && doc.path !== "README.md");
 
-  const result = docs.map((doc) => {
+  const result: Page[] = docs.map((doc) => {
     const content = rewriteLinks(doc.content, doc.path, pages, repoUrl).trimEnd();
     return {
       name: pageName(doc),
@@ -119,6 +122,12 @@ export function buildWiki(docs: Doc[], repoUrl: string): Page[] {
     name: "_Footer",
     content: `Generated from the [repository docs](${repoUrl}/tree/main/docs). Edit the files there; changes made in the wiki are overwritten.\n`,
   });
+
+  const names = new Set<string>();
+  for (const { name } of result) {
+    if (names.has(name)) throw new Error(`Two pages would be written as "${name}.md"`);
+    names.add(name);
+  }
   return result;
 }
 

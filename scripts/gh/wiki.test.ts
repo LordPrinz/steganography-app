@@ -50,6 +50,24 @@ describe("wiki", () => {
     );
   });
 
+  test("serves images raw and rewrites links with a title", () => {
+    expect(rewriteLinks("![d](diagram.png)", "docs/DESIGN.md", pages, REPO)).toBe(
+      `![d](${REPO}/raw/main/docs/diagram.png)`,
+    );
+    expect(rewriteLinks('[d](DESIGN.md "Design")', "docs/x.md", pages, REPO)).toBe(
+      '[d](Design "Design")',
+    );
+  });
+
+  test("treats only numbered files in docs/adr as ADRs", () => {
+    expect(pageName({ path: "docs/adr/template.md", content: "# Template\n" })).toBe("Template");
+  });
+
+  test("refuses to overwrite a page with another doc of the same title", () => {
+    const clash = [...docs, { path: "docs/notes.md", content: "# Design\n" }];
+    expect(() => buildWiki(clash, REPO)).toThrow('"Design.md"');
+  });
+
   test("leaves code blocks untouched", () => {
     const design = buildWiki(docs, REPO).find((page) => page.name === "Design");
     expect(design?.content).toContain("[not](a-link.md)");
