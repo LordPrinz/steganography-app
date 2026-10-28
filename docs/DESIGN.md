@@ -13,7 +13,7 @@ The robustness lab is the core of the project; accounts and gallery are standard
 ## Components
 
 ```
-web (Next.js) ──/api/* rewrite──▶ api (Bun.serve) ──▶ Postgres (jobs, metadata)
+web (Next.js) ──/api/v1/* rewrite──▶ api (Bun.serve) ──▶ Postgres (jobs, metadata)
                                         │                    ▲
                                         ▼                    │
                                   R2 / RustFS ◀─────── worker (Bun)

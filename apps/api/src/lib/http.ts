@@ -4,6 +4,15 @@ export function json<T>(body: T, init?: ResponseInit): Response {
   return Response.json(body, init);
 }
 
+export const API_PREFIX = "/api/v1";
+
+/** Mounts module routes (declared relative, e.g. "/health") under the API version prefix. */
+export function mount<T extends Record<string, unknown>>(prefix: string, routes: T): T {
+  return Object.fromEntries(
+    Object.entries(routes).map(([path, handlers]) => [`${prefix}${path}`, handlers]),
+  ) as T;
+}
+
 export class HttpError extends Error {
   constructor(
     readonly status: number,

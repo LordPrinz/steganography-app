@@ -7,7 +7,7 @@ import { apiGet } from "@/lib/api.ts";
 export function ApiStatus() {
   const { data, isPending, isError } = useQuery({
     queryKey: ["health"],
-    queryFn: () => apiGet("/api/health", HealthResponse),
+    queryFn: () => apiGet("/api/v1/health", HealthResponse),
   });
 
   const label = isPending ? "checking…" : isError ? "unreachable" : `ok (v${data.version})`;
