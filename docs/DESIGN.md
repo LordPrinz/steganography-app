@@ -16,7 +16,7 @@ The robustness lab is the core of the project; accounts and gallery are standard
 web (Next.js) ──/api/* rewrite──▶ api (Bun.serve) ──▶ Postgres (jobs, metadata)
                                         │                    ▲
                                         ▼                    │
-                                  R2 / MinIO ◀──────── worker (Bun)
+                                  R2 / RustFS ◀─────── worker (Bun)
                                                    uses stego-engine + image-io
 ```
 
@@ -80,7 +80,7 @@ get a C implementation via `bun:ffi` behind the same interface, verified against
 
 ### Bun built-ins over libraries
 
-Bun ships what this project needs: `Bun.serve` (routing), `Bun.SQL` (Postgres), `Bun.s3` (R2 / MinIO,
+Bun ships what this project needs: `Bun.serve` (routing), `Bun.SQL` (Postgres), `Bun.s3` (R2 / RustFS,
 presigned URLs), `Bun.password`, `Bun.Image`, `Bun.hash.crc32`, `bun:test`, `bun:ffi`. A library is added
 only when Bun has no equivalent (zod for validation, Next.js and React for the UI). See ADR 2.
 

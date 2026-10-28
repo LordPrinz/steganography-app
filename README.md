@@ -15,7 +15,7 @@ Image steganography web app: hide and recover data using **LSB**, **DCT (Koch–
 | Frontend          | Next.js 16 (App Router), React 19, Tailwind CSS 4, TanStack Query                                                        |
 | API & worker      | Bun + TypeScript, Zod contracts                                                                                          |
 | Database          | PostgreSQL via `Bun.SQL`, plain SQL migrations                                                                           |
-| Object storage    | Cloudflare R2 via `Bun.s3` (MinIO locally)                                                                               |
+| Object storage    | Cloudflare R2 via `Bun.s3` (RustFS locally)                                                                              |
 | Quality           | Biome, TypeScript strict, Husky git hooks, GitHub Actions                                                                |
 
 ## Repository layout
@@ -30,7 +30,7 @@ packages/
   image-io/       decoding / encoding / attacks on top of Bun.Image
   contracts/      Zod schemas shared by api and web
   db/             SQL migrations, migration runner, row types (Bun.SQL)
-infra/            docker-compose for Postgres + MinIO
+infra/            docker-compose for Postgres + RustFS (S3)
 scripts/          git hooks and GitHub automation (Bun scripts)
 docs/             design docs and ADRs
 ```
@@ -42,7 +42,7 @@ Requirements: Bun ≥ 1.4.4, Docker.
 ```bash
 bun install            # also installs the git hooks
 cp .env.example .env
-bun run infra:up       # Postgres :5432, MinIO :9000 (console :9001)
+bun run infra:up       # Postgres :5432, RustFS S3 :9000 (console :9001/rustfs/console/)
 bun run db:migrate
 bun run dev            # api :4000, worker, web :3000
 ```
