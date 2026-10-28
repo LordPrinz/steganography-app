@@ -7,6 +7,13 @@ updates:
     groups:
       minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      # TypeScript 7 (native compiler) has no JS API yet; Next.js type checking needs it.
+      - dependency-name: typescript
+        update-types: [version-update:semver-major]
+      # Track the Node.js LTS that runs Next.js, not the newest major.
+      - dependency-name: "@types/node"
+        update-types: [version-update:semver-major]
   - package-ecosystem: github-actions
     directory: /
     schedule:
