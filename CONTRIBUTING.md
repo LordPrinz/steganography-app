@@ -10,6 +10,15 @@
 
 Everyone writes docs for their own area. Every PR is reviewed by someone from a **different** area, so the whole team knows the whole system. Owners are listed in [.github/CODEOWNERS](.github/CODEOWNERS).
 
+## First-time setup (repository owner)
+
+```bash
+gh auth refresh -s project   # Projects API needs the extra scope
+bun run gh:setup             # repository settings + rules, then the project board
+```
+
+The script prints the few steps GitHub only allows in the browser (board views, built-in workflows, `PROJECTS_TOKEN` secret).
+
 ## Board
 
 `Backlog → Todo → In Progress → QA → Done`
