@@ -1,0 +1,47 @@
+name: Wiki
+
+# Publishes README, CONTRIBUTING and docs/ to the repository wiki (see scripts/gh/wiki.ts).
+# The wiki is generated: edit the files in the repository, not the wiki pages.
+on:
+  push:
+    branches: [main]
+    paths:
+      - README.md
+      - CONTRIBUTING.md
+      - "docs/**"
+      - scripts/gh/wiki.ts
+      - .github/workflows/wiki.yml
+  workflow_dispatch:
+
+concurrency:
+  group: wiki
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          repository: ${{ github.repository }}.wiki
+          path: .wiki
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bun scripts/gh/wiki.ts .wiki
+      - name: Push
+        working-directory: .wiki
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Wiki is up to date."
+            exit 0
+          fi
+          git commit -m "Sync docs from ${GITHUB_SHA::7}"
+          git push
