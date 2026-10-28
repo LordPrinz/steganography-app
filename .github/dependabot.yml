@@ -4,6 +4,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # PR titles become "[ST-33] build(deps): Bump …", which passes the title convention.
+    commit-message:
+      prefix: "[ST-33] build"
+      include: scope
     groups:
       minor-and-patch:
         update-types: [minor, patch]
@@ -18,3 +22,6 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    commit-message:
+      prefix: "[ST-33] build"
+      include: scope

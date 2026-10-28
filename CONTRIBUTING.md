@@ -54,6 +54,8 @@ gh pr create --fill                              # PR title must follow the same
   - scopes: `engine`, `image-io`, `api`, `worker`, `db`, `web`, `infra`
   - `!` after the type/scope marks a breaking change.
 - PRs are **squash-merged**; the PR title becomes the commit on `main`.
+- **Dependabot** keeps its own `dependabot/…` branches; its PRs use the umbrella ticket ST-33
+  (`[ST-33] build(deps): Bump …`) and go through the same checks.
 
 ## Git hooks (Husky)
 
