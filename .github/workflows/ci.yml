@@ -18,7 +18,7 @@ env:
 jobs:
   conventions:
     name: Conventions
-    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]'
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

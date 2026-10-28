@@ -23,6 +23,9 @@ export const HEADER_PATTERN = new RegExp(
 /** Branches that never carry a ticket number. */
 export const UNTICKETED_BRANCHES = new Set(["main", "HEAD"]);
 
+/** Dependabot names its own branches (`dependabot/bun/zod-4.2.0`); its PR titles carry ST-33. */
+export const BOT_BRANCH_PATTERN = /^dependabot\/[\w./-]+$/;
+
 /** Commits git generates itself; they are allowed without a ticket. */
 export const GENERATED_HEADER = /^(?:Merge |Revert "|fixup! |squash! |amend! )/;
 

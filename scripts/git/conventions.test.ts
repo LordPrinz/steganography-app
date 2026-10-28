@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  BOT_BRANCH_PATTERN,
   BRANCH_PATTERN,
   GENERATED_HEADER,
   HEADER_PATTERN,
@@ -35,6 +36,15 @@ describe("git conventions", () => {
     expect(BRANCH_PATTERN.test("ST-44-set-user-permissions")).toBe(true);
     expect(BRANCH_PATTERN.test("feature/login")).toBe(false);
     expect(BRANCH_PATTERN.test("ST-44-Set-User")).toBe(false);
+  });
+
+  test("recognises Dependabot branches", () => {
+    expect(BOT_BRANCH_PATTERN.test("dependabot/github_actions/actions/checkout-7")).toBe(true);
+    expect(BOT_BRANCH_PATTERN.test("dependabot/bun/minor-and-patch-1a2b3c")).toBe(true);
+    expect(BOT_BRANCH_PATTERN.test("dependabot-checkout")).toBe(false);
+    expect(HEADER_PATTERN.test("[ST-33] build(deps): Bump actions/checkout from 5 to 7")).toBe(
+      true,
+    );
   });
 
   test("extracts the ticket from a branch", () => {
