@@ -5,7 +5,7 @@ import { json } from "../../lib/http.ts";
 const startedAt = performance.now();
 
 export const healthRoutes = {
-  "/api/health": {
+  "/health": {
     GET: () =>
       json<HealthResponse>({
         status: "ok",
