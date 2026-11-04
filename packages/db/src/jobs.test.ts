@@ -36,6 +36,18 @@ describe("backoffMs", () => {
   });
 });
 
+describe("createJobQueue options", () => {
+  test("rejects non-positive limits", () => {
+    const unused = {} as SQL;
+    expect(() => createJobQueue(unused, { maxAttempts: 0 })).toThrow(
+      "maxAttempts must be a positive number",
+    );
+    expect(() => createJobQueue(unused, { leaseMs: -1 })).toThrow(
+      "leaseMs must be a positive number",
+    );
+  });
+});
+
 describe.skipIf(!sql)("job queue", () => {
   const db = sql as SQL;
 
@@ -72,7 +84,7 @@ describe.skipIf(!sql)("job queue", () => {
   });
 
   test("claim marks the job and its operation running and returns the operation", async () => {
-    const op = await newOperation({ text: "x" });
+    const op = await newOperation({ strength: 1 });
     const queue = createJobQueue(db);
     const queued = await queue.enqueue(op.id);
 
@@ -85,7 +97,7 @@ describe.skipIf(!sql)("job queue", () => {
       type: "encode",
       method: "lsb",
       source_image_id: null,
-      params: { text: "x" },
+      params: { strength: 1 },
     });
     expect(await operationStatus(op.id)).toBe("running");
     expect(await queue.claim()).toBeNull();

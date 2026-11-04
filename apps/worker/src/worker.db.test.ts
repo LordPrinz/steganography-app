@@ -27,7 +27,7 @@ describe.skipIf(!sql)("worker against Postgres", () => {
   test("retries a failing job and records the result once a later attempt succeeds", async () => {
     const db = sql as SQL;
     const [op] = await db<{ id: string }[]>`
-      WITH u AS (INSERT INTO users (email, password_hash) VALUES ('worker@test.local', 'x') RETURNING id)
+      WITH u AS (INSERT INTO users (email, password_hash) VALUES (${`${crypto.randomUUID()}@test.local`}, 'x') RETURNING id)
       INSERT INTO operations (user_id, type) SELECT id, 'encode' FROM u RETURNING id
     `;
     if (!op) throw new Error("expected an operation");
@@ -36,7 +36,7 @@ describe.skipIf(!sql)("worker against Postgres", () => {
 
     const worker = createWorker({
       queue,
-      log: { info: () => {}, error: () => {} },
+      log: { error: () => {} },
       pollIntervalMs: 5,
       handlers: {
         encode: async (job) => {

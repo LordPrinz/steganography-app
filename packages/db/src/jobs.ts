@@ -60,10 +60,19 @@ export function backoffMs(attempt: number, baseMs: number, maxMs: number): numbe
 
 export function createJobQueue(sql: SQL, options: JobQueueOptions = {}): JobQueue {
   const { maxAttempts, backoffBaseMs, backoffMaxMs, leaseMs } = { ...DEFAULTS, ...options };
+  for (const [name, value] of Object.entries({
+    maxAttempts,
+    backoffBaseMs,
+    backoffMaxMs,
+    leaseMs,
+  })) {
+    if (!Number.isFinite(value) || value <= 0)
+      throw new RangeError(`${name} must be a positive number`);
+  }
   const leaseSecs = leaseMs / 1000;
 
-  // A crashed worker leaves its job running. Abandoned jobs with attempts left are claimed again below;
-  // the rest are failed here so a job that keeps killing workers cannot loop forever.
+  // A crashed worker leaves its job running. Abandoned jobs with attempts left are claimed again by
+  // claim(); the rest are failed here so a job that keeps killing workers cannot loop forever.
   async function failAbandoned(): Promise<void> {
     await sql`
       WITH dead AS (
@@ -90,7 +99,8 @@ export function createJobQueue(sql: SQL, options: JobQueueOptions = {}): JobQueu
         WITH next AS (
           SELECT id FROM jobs
           WHERE (status = 'queued' AND run_after <= now())
-             OR (status = 'running' AND locked_at < now() - make_interval(secs => ${leaseSecs}))
+             OR (status = 'running' AND locked_at < now() - make_interval(secs => ${leaseSecs})
+                 AND attempts < ${maxAttempts})
           ORDER BY run_after
           LIMIT 1
           FOR UPDATE SKIP LOCKED

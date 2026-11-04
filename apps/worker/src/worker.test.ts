@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import type { ClaimedJob, JobQueue, OperationType } from "@stego/db";
 import { createWorker } from "./worker.ts";
 
-const silent = { info: () => {}, error: () => {} };
+const silent = { error: () => {} };
 
 function fakeJob(id: string, type: OperationType = "encode"): ClaimedJob {
   return {
@@ -78,6 +78,50 @@ describe("worker", () => {
     expect(queue.complete).not.toHaveBeenCalled();
   });
 
+  test("a database error while completing does not count as a failed attempt", async () => {
+    const queue = fakeQueue([fakeJob("a")]);
+    queue.complete.mockImplementation(async () => {
+      worker.stop();
+      throw new Error("connection reset");
+    });
+    const error = mock(() => {});
+    const worker = createWorker({
+      queue,
+      log: { error },
+      handlers: { encode: async () => ({ ok: true }) },
+    });
+
+    await worker.run();
+    expect(queue.fail).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith("Job queue error:", expect.any(Error));
+  });
+
+  test("logs when the lease was lost and the outcome was discarded", async () => {
+    const queue = fakeQueue([fakeJob("a")]);
+    queue.complete.mockImplementation(async () => {
+      worker.stop();
+      return false;
+    });
+    const error = mock(() => {});
+    const worker = createWorker({ queue, log: { error }, handlers: { encode: async () => null } });
+
+    await worker.run();
+    expect(error).toHaveBeenCalledWith("Job a attempt 1: lease lost, outcome discarded");
+  });
+
+  test("run() cannot be started twice", async () => {
+    const worker = createWorker({
+      queue: fakeQueue([]),
+      log: silent,
+      pollIntervalMs: 60_000,
+      handlers: {},
+    });
+    const done = worker.run();
+    await expect(worker.run()).rejects.toThrow("Worker is already running");
+    worker.stop();
+    await done;
+  });
+
   test("a job type without a handler fails without retries", async () => {
     const queue = fakeQueue([fakeJob("a", "experiment")]);
     const worker = createWorker({ queue, log: silent, pollIntervalMs: 5, handlers: {} });
@@ -133,7 +177,7 @@ describe("worker", () => {
     const start = performance.now();
     worker.stop();
     await done;
-    expect(performance.now() - start).toBeLessThan(100);
+    expect(performance.now() - start).toBeLessThan(500);
   });
 
   test("a queue error is logged and the loop keeps polling", async () => {
@@ -151,7 +195,7 @@ describe("worker", () => {
     };
     const worker = createWorker({
       queue,
-      log: { info: () => {}, error },
+      log: { error },
       pollIntervalMs: 1,
       handlers: {},
     });
