@@ -102,7 +102,7 @@ describe.skipIf(!sql)("job queue", () => {
     expect(await db`SELECT id FROM jobs`).toHaveLength(0);
 
     await queue.enqueue(op.id);
-    await expect(queue.enqueue(op.id)).rejects.toThrow();
+    await expect(queue.enqueue(op.id)).rejects.toThrow(/jobs_operation_idx/);
   });
 
   test("claim marks the job and its operation running and returns the operation", async () => {

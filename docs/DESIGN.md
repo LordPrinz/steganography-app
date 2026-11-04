@@ -70,8 +70,8 @@ While a job runs the worker renews `locked_at` every 30 s. A `running` job whose
 the old owner can no longer renew or complete it. On SIGTERM the worker stops claiming and finishes the job
 it holds. The operation's `status` follows its job, and each operation has at most one job.
 
-`jobs.error` holds a short code from `JobError` (`timeout`, `no_handler`, …), never a free-form message;
-any other error is stored as `internal_error` and its details go only to the worker log. Handler results
+`jobs.error` holds only a short code from `JobError` (`timeout`, `no_handler`, …). Any other error is
+stored as `internal_error`, and its details go only to the worker log. Handler results
 land in `operations.result`, so they must not contain the hidden message either.
 
 ### Redis for ephemeral state

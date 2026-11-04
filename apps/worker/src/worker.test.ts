@@ -254,4 +254,56 @@ describe("worker", () => {
     expect(queue.extend).toHaveBeenCalledTimes(3);
     expect(queue.fail.mock.calls[0]?.[1]).toEqual(new JobError("lease_lost"));
   });
+
+  test("run() cannot start a second loop while a stopped one is still finishing its job", async () => {
+    const queue = fakeQueue([fakeJob("a")]);
+    const { promise: started, resolve: markStarted } = Promise.withResolvers<void>();
+    const { promise: release, resolve: releaseJob } = Promise.withResolvers<void>();
+    const worker = createWorker({
+      queue,
+      log: silent,
+      handlers: {
+        encode: async () => {
+          markStarted();
+          await release;
+          return null;
+        },
+      },
+    });
+
+    const done = worker.run();
+    await started;
+    worker.stop();
+    await expect(worker.run()).rejects.toThrow("Worker is already running");
+    releaseJob();
+    await done;
+  });
+
+  test("does not stack lease renewals while one is still in flight", async () => {
+    const queue = fakeQueue([fakeJob("a")]);
+    const { promise: slowExtend, resolve: finishExtend } = Promise.withResolvers<boolean>();
+    queue.extend.mockImplementation(() => slowExtend);
+    const worker = createWorker({
+      queue,
+      log: silent,
+      heartbeatMs: 2,
+      handlers: {
+        encode: async () => {
+          worker.stop();
+          await Bun.sleep(30);
+          return null;
+        },
+      },
+    });
+
+    await worker.run();
+    expect(queue.extend).toHaveBeenCalledTimes(1);
+    finishExtend(true);
+  });
+
+  test("rejects invalid timer options", () => {
+    const queue = fakeQueue([]);
+    expect(() => createWorker({ queue, handlers: {}, heartbeatMs: 0 })).toThrow(RangeError);
+    expect(() => createWorker({ queue, handlers: {}, jobTimeoutMs: 2 ** 31 })).toThrow(RangeError);
+  });
 });

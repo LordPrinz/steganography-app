@@ -1,7 +1,10 @@
 import type { ClaimedJob, OperationType } from "@stego/db";
 
 export interface JobContext {
-  /** Aborted when the job times out or its lease is lost. Check it between steps and stop early. */
+  /**
+   * Aborted when the job times out or its lease is lost. The worker moves on at that point, so check it
+   * between steps, stop early and write no side effects (storage, rows) after it fires.
+   */
   signal: AbortSignal;
 }
 

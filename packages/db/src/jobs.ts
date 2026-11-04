@@ -180,7 +180,7 @@ export function createJobQueue(sql: SQL, options: JobQueueOptions = {}): JobQueu
     },
 
     async fail(job, error, { retry = true } = {}) {
-      const code = errorMessage(error);
+      const code = errorCode(error);
       const final = !retry || job.attempts >= maxAttempts;
       const delaySecs = backoffMs(job.attempts, backoffBaseMs, backoffMaxMs) / 1000;
       return sql.begin(async (tx) => {
@@ -207,6 +207,6 @@ export function createJobQueue(sql: SQL, options: JobQueueOptions = {}): JobQueu
   };
 }
 
-function errorMessage(error: unknown): string {
+function errorCode(error: unknown): string {
   return error instanceof JobError ? error.code : "internal_error";
 }
