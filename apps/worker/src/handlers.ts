@@ -11,7 +11,8 @@ export interface JobContext {
 /**
  * Returns the result stored on the operation. Throwing fails the attempt and the queue decides about
  * retries; throw `JobError` with a public code, since any other error is stored as "internal_error".
- * Never put the hidden message in the result: it is persisted.
+ * `job.operation.params` was written by the user: parse it with the contract schema before use. Never put
+ * the hidden message in the result (it is persisted) or in an error message (errors are logged).
  */
 export type JobHandler = (
   job: ClaimedJob,

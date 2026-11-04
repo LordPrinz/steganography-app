@@ -71,8 +71,9 @@ the old owner can no longer renew or complete it. On SIGTERM the worker stops cl
 it holds. The operation's `status` follows its job, and each operation has at most one job.
 
 `jobs.error` holds only a short code from `JobError` (`timeout`, `no_handler`, …). Any other error is
-stored as `internal_error`, and its details go only to the worker log. Handler results
-land in `operations.result`, so they must not contain the hidden message either.
+stored as `internal_error`, and its details go only to the worker log. Handler results are stored in
+`operations.result` and errors are logged, so neither may contain the hidden message, and neither may
+`operations.params`. Handlers treat `params` as user input and parse it with the contract schema.
 
 ### Redis for ephemeral state
 

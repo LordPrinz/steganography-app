@@ -61,7 +61,7 @@ export function createWorker({
     const abort = new AbortController();
     let renewing = false;
     const heartbeat = setInterval(async () => {
-      // Skip a beat while the previous renewal is still in flight instead of piling up queries.
+      // Skip a beat while the previous renewal is still in flight, so a slow database gets one query at a time.
       if (renewing) return;
       renewing = true;
       try {
