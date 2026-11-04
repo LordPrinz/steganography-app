@@ -22,7 +22,7 @@ keeps. Bun 1.4 ships a Redis client (`RedisClient` / `Bun.redis`), so Redis adds
   has a TTL.
 - `GET /api/v1/health/ready` returns 503 when Redis does not answer within 1 s.
 - The job queue stays in Postgres (`FOR UPDATE SKIP LOCKED`), because jobs must be durable and
-  transactional with their rows. Durable data never goes to Redis.
+  transactional with their rows.
 
 ## Consequences
 
@@ -30,4 +30,3 @@ keeps. Bun 1.4 ships a Redis client (`RedisClient` / `Bun.redis`), so Redis adds
   port bound to `127.0.0.1`. Its password comes from `REDIS_PASSWORD` in `.env` and is never committed.
 - Rate-limit keys hold a SHA-256 of the id, so e-mails and IPs are not stored in Redis.
 - If Redis is lost, only counters and cache entries go with it, so it needs no backup.
-- We use no `ioredis` or `node-redis`, per ADR 2.
