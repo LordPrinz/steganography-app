@@ -167,7 +167,7 @@ describe.each(methodCases)("stego codec: $name", ({ method }) => {
   describe("measure", () => {
     test("gives BER 0 without an attack", () => {
       const stego = hide(cover, "secret", method);
-      expect(measure(stego, "secret", method)).toEqual({ ok: true, message: "secret", ber: 0 });
+      expect(measure(stego, "secret", method)).toEqual({ ok: true, ber: 0 });
     });
 
     test("counts flipped payload bits even when the CRC fails", () => {
@@ -189,9 +189,14 @@ describe.each(methodCases)("stego codec: $name", ({ method }) => {
       const crcDamaged = flipFrameBit(cover, stego, method, crcBit);
       expect(measure(crcDamaged, message, method)).toMatchObject({ error: "corrupted", ber: 0 });
 
+      // MSB of the method id byte: ids 1-3 become 0x81-0x83, which are unknown.
       const methodIdBit = 3 * 8;
       stego = flipFrameBit(cover, stego, method, methodIdBit);
       expect(measure(stego, message, method)).toMatchObject({ error: "no-message", ber: 0 });
+    });
+
+    test("throws CapacityExceededError when the expected message could never fit", () => {
+      expect(() => measure(noiseImage(1, 1), "x", method)).toThrow(CapacityExceededError);
     });
 
     test("gives BER 0 for an empty expected message", () => {

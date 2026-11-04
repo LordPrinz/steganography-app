@@ -14,8 +14,13 @@ export type RevealResult =
   | { readonly ok: true; readonly message: string }
   | { readonly ok: false; readonly error: RevealError };
 
-/** Reveal result plus the bit error rate over the payload bits of the expected message. */
-export type MeasureResult = RevealResult & { readonly ber: number };
+/**
+ * Reveal outcome plus the bit error rate over the payload bits of the expected message. It never
+ * carries the revealed message, so a lab result can be stored as is.
+ */
+export type MeasureResult =
+  | { readonly ok: true; readonly ber: number }
+  | { readonly ok: false; readonly error: RevealError; readonly ber: number };
 
 /** The message does not fit; sizes are UTF-8 message bytes, as returned by `capacity`. */
 export class CapacityExceededError extends Error {
@@ -101,5 +106,7 @@ export function measure(
     if (actual[i] !== expected[i]) errors++;
   }
   const payloadBits = payloadEnd - HEADER_BITS;
-  return { ...reveal(attacked, method), ber: payloadBits === 0 ? 0 : errors / payloadBits };
+  const ber = payloadBits === 0 ? 0 : errors / payloadBits;
+  const revealed = reveal(attacked, method);
+  return revealed.ok ? { ok: true, ber } : { ok: false, error: revealed.error, ber };
 }

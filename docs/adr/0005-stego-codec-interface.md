@@ -21,7 +21,9 @@ every call, so a caller had to carry the method and its parameters around as a p
   - `reveal(image, method)` returns `{ ok: true, message }` or `{ ok: false, error }` with `error` one
     of `no-message`, `corrupted` or `method-mismatch`. Failure is a returned value; `reveal`
     does not throw for it.
-  - `measure(attacked, expectedMessage, method)` returns the reveal result plus `ber`.
+  - `measure(attacked, expectedMessage, method)` returns `{ ok, ber }` or `{ ok: false, error, ber }`:
+    the reveal outcome without the revealed message, plus `ber`. The caller already has the expected
+    message, and leaving it out means a lab result can be stored without leaking the hidden text.
   - `capacity(width, height, method)` returns UTF-8 message bytes after the frame overhead.
 - The message is a `string`. UTF-8 encoding and decoding happen only inside the codec. Decoding is
   strict (invalid UTF-8 means `corrupted`) and keeps a leading BOM, because it is part of the message.
@@ -33,7 +35,10 @@ every call, so a caller had to carry the method and its parameters around as a p
   unknown method id, or an image too small for a header) is `no-message`. A payload length above the
   capacity, a CRC mismatch or invalid UTF-8 is `corrupted`. A valid frame with another method's id
   is `method-mismatch`. The length bound means a damaged length field never makes a method read
-  past what it can hold.
+  past what it can hold. Because the length and CRC are checked first, `method-mismatch` needs both
+  methods to share a bit layout. A frame from a method that embeds in another domain (LSB vs DCT)
+  reads as noise and gives `no-message`, and one longer than this method's capacity gives
+  `corrupted`.
 - BER counts only payload bits (the UTF-8 message). It compares the bits read from the attacked image
   with the bits of the frame the codec would write for the expected message, at the same positions.
   It is defined even when the CRC fails, and it is 0 for an empty message. Header and CRC bits are
