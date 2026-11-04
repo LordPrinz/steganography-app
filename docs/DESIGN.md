@@ -63,6 +63,18 @@ Encoding and experiments (3 methods × N attack variants) run in `apps/worker`, 
 loop. The API inserts a `jobs` row; the worker picks it with `SELECT … FOR UPDATE SKIP LOCKED`; the
 frontend polls job status. The queue is not in Redis: jobs are durable and transactional with their rows.
 
+A failed attempt goes back to `queued` with exponential backoff (`run_after`) until `maxAttempts`, then
+`failed`. A job type without a handler, or one that runs past its timeout (10 min by default), fails at once.
+While a job runs the worker renews `locked_at` every 30 s. A `running` job whose lock is older than the
+2-minute lease was left by a crashed worker and is claimed again. `attempts` doubles as a fencing token, so
+the old owner can no longer renew or complete it. On SIGTERM the worker stops claiming and finishes the job
+it holds. The operation's `status` follows its job, and each operation has at most one job.
+
+`jobs.error` holds only a short code from `JobError` (`timeout`, `no_handler`, …). Any other error is
+stored as `internal_error`, and its details go only to the worker log. Handler results are stored in
+`operations.result` and errors are logged, so neither may contain the hidden message, and neither may
+`operations.params`. Handlers treat `params` as user input and parse it with the contract schema.
+
 ### Redis for ephemeral state
 
 Rate-limit counters and small caches live in Redis behind a `KeyValueStore` port (Bun `RedisClient`).
