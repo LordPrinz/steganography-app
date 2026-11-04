@@ -16,6 +16,7 @@ Image steganography web app: hide and recover data using **LSB**, **DCT (Koch–
 | API & worker      | Bun + TypeScript, Zod contracts                                                                                          |
 | Database          | PostgreSQL via `Bun.SQL`, plain SQL migrations                                                                           |
 | Object storage    | Cloudflare R2 via `Bun.s3` (RustFS locally)                                                                              |
+| Cache / limits    | Redis via Bun `RedisClient`                                                                                              |
 | Quality           | Biome, TypeScript strict, Husky git hooks, GitHub Actions                                                                |
 
 ## Repository layout
@@ -30,7 +31,7 @@ packages/
   image-io/       decoding / encoding / attacks on top of Bun.Image
   contracts/      Zod schemas shared by api and web
   db/             SQL migrations, migration runner, row types (Bun.SQL)
-infra/            docker-compose for Postgres + RustFS (S3)
+infra/            docker-compose for Postgres, Redis and RustFS (S3)
 scripts/          git hooks and GitHub automation (Bun scripts)
 docs/             design docs and ADRs
 ```
@@ -42,19 +43,19 @@ Requirements: Bun ≥ 1.4.4, Docker.
 ```bash
 bun install            # also installs the git hooks
 cp .env.example .env
-bun run infra:up       # Postgres :5432, RustFS S3 :9000 (console :9001/rustfs/console/)
+bun run infra:up       # Postgres :5432, Redis :6379, RustFS S3 :9000 (console :9001/rustfs/console/)
 bun run db:migrate
 bun run dev            # api :4000, worker, web :3000
 ```
 
 ## Scripts
 
-| Command                       | What it does                                                 |
-| ----------------------------- | ------------------------------------------------------------ |
-| `bun run dev`                 | api + worker + web in watch mode                             |
-| `bun run check` / `check:fix` | Biome lint + format                                          |
-| `bun run typecheck`           | `tsc` in every workspace                                     |
-| `bun test`                    | all tests (DB tests run when `TEST_DATABASE_URL` is set)     |
-| `bun run build`               | production build of the web app                              |
-| `bun run db:new <name>`       | new empty migration `packages/db/migrations/NNNN_<name>.sql` |
-| `bun run db:migrate`          | apply migrations                                             |
+| Command                       | What it does                                                             |
+| ----------------------------- | ------------------------------------------------------------------------ |
+| `bun run dev`                 | api + worker + web in watch mode                                         |
+| `bun run check` / `check:fix` | Biome lint + format                                                      |
+| `bun run typecheck`           | `tsc` in every workspace                                                 |
+| `bun test`                    | all tests (DB / Redis tests need `TEST_DATABASE_URL` / `TEST_REDIS_URL`) |
+| `bun run build`               | production build of the web app                                          |
+| `bun run db:new <name>`       | new empty migration `packages/db/migrations/NNNN_<name>.sql`             |
+| `bun run db:migrate`          | apply migrations                                                         |

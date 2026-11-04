@@ -15,6 +15,7 @@ over things Bun already does.
 | ---------------- | ----------------------------------- | ------------------------ |
 | HTTP routing     | `Bun.serve({ routes })`             | Hono / Express           |
 | Postgres         | `Bun.SQL` + plain `.sql` migrations | Drizzle / Prisma / pg    |
+| Redis            | `RedisClient` (`Bun.redis`)         | ioredis / node-redis     |
 | R2 / MinIO       | `Bun.s3` / `S3Client`               | AWS SDK                  |
 | Passwords        | `Bun.password` (argon2id)           | bcrypt / argon2 packages |
 | Images           | `Bun.Image`                         | sharp / jimp             |
