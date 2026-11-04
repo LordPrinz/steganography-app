@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: stego
       POSTGRES_DB: stego
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -17,13 +17,19 @@ services:
       timeout: 3s
       retries: 10
 
-  # Rate limits and short-lived shared state (ADR 0003). Local-only password.
+  # Rate limits and short-lived shared state (ADR 0003). Password comes from .env.
   redis:
     image: redis:8-alpine
     command:
-      ["redis-server", "--requirepass", "bZ8tiXpk7Bc3jiKAkWnew0djVsDoyUt4", "--appendonly", "yes"]
+      [
+        "redis-server",
+        "--requirepass",
+        "${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}",
+        "--appendonly",
+        "yes",
+      ]
     environment:
-      REDISCLI_AUTH: bZ8tiXpk7Bc3jiKAkWnew0djVsDoyUt4
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
@@ -41,8 +47,8 @@ services:
       RUSTFS_ACCESS_KEY: stego
       RUSTFS_SECRET_KEY: stego-secret
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     volumes:
       - rustfs-data:/data
     healthcheck:

@@ -26,7 +26,8 @@ keeps. Bun 1.4 ships a Redis client (`RedisClient` / `Bun.redis`), so Redis adds
 
 ## Consequences
 
-- Docker Compose and CI each run one more service. Locally it is Redis 8 with a password, an AOF
-  volume, and the port bound to `127.0.0.1`.
+- Docker Compose and CI each run one more service. Locally it is Redis 8 with an AOF volume and the
+  port bound to `127.0.0.1`. Its password comes from `REDIS_PASSWORD` in `.env` and is never committed.
+- Rate-limit keys hold a SHA-256 of the id, so e-mails and IPs are not stored in Redis.
 - If Redis is lost, only counters and cache entries go with it, so it needs no backup.
 - We use no `ioredis` or `node-redis`, per ADR 2.

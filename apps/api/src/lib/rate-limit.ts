@@ -20,6 +20,11 @@ export interface RateLimiter {
   hit(id: string): Promise<RateLimitResult>;
 }
 
+// SHA-256 keeps keys a fixed size whatever the caller sends, and keeps e-mails and IPs out of Redis.
+function digest(id: string): string {
+  return new Bun.CryptoHasher("sha256").update(id).digest("hex");
+}
+
 /** Fixed-window rate limiter; the window is shared by every API instance using the same store. */
 export function createRateLimiter(
   store: KeyValueStore,
@@ -34,7 +39,7 @@ export function createRateLimiter(
 
   return {
     async hit(id) {
-      const { count, ttlMs } = await store.increment(`ratelimit:${name}:${id}`, windowMs);
+      const { count, ttlMs } = await store.increment(`ratelimit:${name}:${digest(id)}`, windowMs);
       const allowed = count <= limit;
       return {
         allowed,

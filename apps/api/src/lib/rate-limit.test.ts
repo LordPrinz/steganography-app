@@ -62,3 +62,24 @@ describe("rate limiter", () => {
     expect(make({ windowMs: 0 })).toThrow(RangeError);
   });
 });
+
+describe("rate limiter keys", () => {
+  test("hashes the id, so the raw value never reaches the store", async () => {
+    const keys: string[] = [];
+    const store = createMemoryStore();
+    const spy = {
+      ...store,
+      increment: (key: string, ttlMs: number) => {
+        keys.push(key);
+        return store.increment(key, ttlMs);
+      },
+    };
+    const limiter = createRateLimiter(spy, { name: "login", limit: 5, windowMs: 1_000 });
+    await limiter.hit("alice@example.com");
+    await limiter.hit("x".repeat(10_000));
+
+    expect(keys[0]).toMatch(/^ratelimit:login:[0-9a-f]{64}$/);
+    expect(keys[0]).not.toContain("alice");
+    expect(keys[1]?.length).toBe(keys[0]?.length);
+  });
+});
