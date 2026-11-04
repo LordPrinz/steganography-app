@@ -94,6 +94,19 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun test --coverage
 
+  native:
+    name: Native (format, sanitizers)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - name: clang-format
+        run: pipx run clang-format==19.1.7 --dry-run --Werror packages/native/c/*.c packages/native/c/*.h packages/native/c/test/*.c
+      - name: ASan + UBSan harness
+        run: bun run native:sanitize
+
   build:
     name: Build web
     runs-on: ubuntu-latest

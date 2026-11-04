@@ -21,14 +21,15 @@ web (Next.js) ──/api/v1/* rewrite──▶ api (Bun.serve) ──▶ Postgre
                                                    uses stego-engine + image-io
 ```
 
-| Package         | Depends on       | Notes                                                                            |
-| --------------- | ---------------- | -------------------------------------------------------------------------------- |
-| `stego-engine`  | —                | Pure functions over raw RGBA pixels and bit streams. No I/O, trivially testable. |
-| `image-io`      | `Bun.Image`      | Decode, re-encode, attacks. Takes and returns bytes, never paths.                |
-| `contracts`     | zod              | Request/response schemas shared by api and web.                                  |
-| `db`            | `Bun.SQL`        | Plain SQL migrations, a small migration runner, row types.                       |
-| `api`, `worker` | all of the above |                                                                                  |
-| `web`           | `contracts` only | Never imports the engine, so nothing server-side ends up in the browser bundle.  |
+| Package         | Depends on            | Notes                                                                            |
+| --------------- | --------------------- | -------------------------------------------------------------------------------- |
+| `stego-engine`  | `native` (planned)    | Pure functions over raw RGBA pixels and bit streams. No I/O, trivially testable. |
+| `image-io`      | `Bun.Image`, `native` | Decode, re-encode, attacks. Takes and returns bytes, never paths.                |
+| `native`        | `bun:ffi`             | Pixel kernels in C behind a typed TS client (ADR 4).                             |
+| `contracts`     | zod                   | Request/response schemas shared by api and web.                                  |
+| `db`            | `Bun.SQL`             | Plain SQL migrations, a small migration runner, row types.                       |
+| `api`, `worker` | all of the above      |                                                                                  |
+| `web`           | `contracts` only      | Never imports the engine, so nothing server-side ends up in the browser bundle.  |
 
 ## Key decisions
 
@@ -72,8 +73,15 @@ reports 503 when Redis is down. See ADR 3.
 
 `Bun.Image` covers decoding (with `maxPixels` against decompression bombs and EXIF auto-orient), JPEG at
 a given quality and resizing with selectable kernels. It does **not** expose raw pixels or blur, so
-`image-io` adds a PNG ↔ RGBA codec and a Gaussian blur (backlog). Hot loops (DCT, Haar, convolution) may
-get a C implementation via `bun:ffi` behind the same interface, verified against the TS version.
+`image-io` adds a PNG ↔ RGBA codec and a Gaussian blur (backlog).
+
+### Pixel kernels in C
+
+Every per-pixel loop (colour conversion, LSB, DCT + Koch–Zhao, Haar DWT + QIM, blur, PSNR/SSIM/BER, PNG
+filters) is C in `packages/native`, built with `cc -O3` and loaded through `bun:ffi` `dlopen`. One FFI
+call covers a whole image or plane. JavaScript owns all buffers, and C returns status codes. Floats
+are compiled without FMA contraction or fast-math, so results match across x64 and arm64. Tests compare
+each kernel with a naive TS oracle, and an ASan/UBSan harness checks memory safety. See ADR 4.
 
 ### Security baseline
 
