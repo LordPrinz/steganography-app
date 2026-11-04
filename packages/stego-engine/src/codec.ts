@@ -22,18 +22,28 @@ export type MeasureResult =
   | { readonly ok: true; readonly ber: number }
   | { readonly ok: false; readonly error: RevealError; readonly ber: number };
 
-/** The message does not fit; sizes are UTF-8 message bytes, as returned by `capacity`. */
+/**
+ * The message does not fit; sizes are UTF-8 message bytes, as returned by `capacity`. `needed` is
+ * the length of the secret message, so it is kept out of the error text: callers that log or return
+ * the error do not leak it by accident.
+ */
 export class CapacityExceededError extends Error {
   readonly needed: number;
   readonly available: number;
 
   constructor(needed: number, available: number) {
-    super(`Message needs ${needed} bytes, the image holds ${available}`);
+    super("Message does not fit in the image");
     this.name = "CapacityExceededError";
     this.needed = needed;
     this.available = available;
   }
 }
+
+/**
+ * Longest message the codec hides or reveals, in UTF-8 bytes. It bounds what `reveal` reads for a
+ * forged length field, independent of how much the image could hold.
+ */
+export const MAX_MESSAGE_BYTES = 64 * 1024;
 
 const utf8Encoder = new TextEncoder();
 // fatal: invalid UTF-8 means the payload was damaged. ignoreBOM: a leading U+FEFF is message text.
@@ -46,28 +56,39 @@ function messageBytesAvailable(width: number, height: number, method: Configured
   return Math.floor(method.capacityBits(width, height) / 8) - FRAME_OVERHEAD_BYTES;
 }
 
-/** UTF-8 message bytes `method` can hide in an image of the given size, after frame overhead. */
+/**
+ * UTF-8 message bytes `method` can hold in an image of the given size, after frame overhead.
+ * `hide` additionally caps a message at `MAX_MESSAGE_BYTES`.
+ */
 export function capacity(width: number, height: number, method: ConfiguredMethod): number {
   return Math.max(0, messageBytesAvailable(width, height, method));
 }
 
+/** Signed like `messageBytesAvailable`, and never above `MAX_MESSAGE_BYTES`. */
+function messageLimit(width: number, height: number, method: ConfiguredMethod): number {
+  return Math.min(messageBytesAvailable(width, height, method), MAX_MESSAGE_BYTES);
+}
+
 function frameFor(width: number, height: number, message: string, method: ConfiguredMethod) {
   const payload = utf8Encoder.encode(message);
-  const available = messageBytesAvailable(width, height, method);
+  const available = messageLimit(width, height, method);
   if (payload.length > available) {
     throw new CapacityExceededError(payload.length, Math.max(0, available));
   }
   return encodeFrame(method.id, payload);
 }
 
-/** Returns a new image with `message` hidden in it. Throws `CapacityExceededError` if it does not fit. */
+/**
+ * Returns a new image with `message` hidden in it. Throws `CapacityExceededError` if it does not
+ * fit the image or is longer than `MAX_MESSAGE_BYTES`.
+ */
 export function hide(image: RgbaImage, message: string, method: ConfiguredMethod): RgbaImage {
   const frame = frameFor(image.width, image.height, message, method);
   return method.embed(image, toBits(frame));
 }
 
 export function reveal(image: RgbaImage, method: ConfiguredMethod): RevealResult {
-  const available = messageBytesAvailable(image.width, image.height, method);
+  const available = messageLimit(image.width, image.height, method);
   if (available < 0) return { ok: false, error: "no-message" };
 
   const header = decodeFrameHeader(fromBits(method.extract(image, HEADER_BITS)));

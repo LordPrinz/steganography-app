@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { fromBits, toBits } from "./bits.ts";
-import { CapacityExceededError, capacity, hide, measure, reveal } from "./codec.ts";
+import {
+  CapacityExceededError,
+  capacity,
+  hide,
+  MAX_MESSAGE_BYTES,
+  measure,
+  reveal,
+} from "./codec.ts";
 import { encodeFrame, FRAME_HEADER_BYTES, FRAME_OVERHEAD_BYTES } from "./payload/frame.ts";
 import { withId } from "./testing/fake-method.ts";
 import { noiseImage } from "./testing/images.ts";
@@ -157,10 +164,45 @@ describe.each(methodCases)("stego codec: $name", ({ method }) => {
       }
       expect(error).toBeInstanceOf(CapacityExceededError);
       expect(error).toMatchObject({ needed: available + 1, available });
+      expect((error as Error).message).not.toContain(String(available + 1));
     });
 
     test("an image too small for any frame rejects even an empty message", () => {
       expect(() => hide(noiseImage(1, 1), "", method)).toThrow(CapacityExceededError);
+    });
+  });
+
+  describe("message length limit", () => {
+    const large = noiseImage(512, 512);
+
+    test("the image holds more than the limit", () => {
+      expect(capacity(large.width, large.height, method)).toBeGreaterThan(MAX_MESSAGE_BYTES);
+    });
+
+    test("round-trips a message of exactly MAX_MESSAGE_BYTES", () => {
+      const message = "x".repeat(MAX_MESSAGE_BYTES);
+      expect(reveal(hide(large, message, method), method)).toEqual({ ok: true, message });
+    });
+
+    test("rejects a longer message although it would fit the image", () => {
+      expect(() => hide(large, "x".repeat(MAX_MESSAGE_BYTES + 1), method)).toThrow(
+        expect.objectContaining({ needed: MAX_MESSAGE_BYTES + 1, available: MAX_MESSAGE_BYTES }),
+      );
+    });
+
+    test("a forged longer frame is corrupted and only its header is read", () => {
+      const frame = encodeFrame(method.id, new Uint8Array(MAX_MESSAGE_BYTES + 1));
+      const stego = method.embed(large, toBits(frame));
+      const reads: number[] = [];
+      const spy: ConfiguredMethod = {
+        ...withId(method, method.id),
+        extract: (image, bitCount) => {
+          reads.push(bitCount);
+          return method.extract(image, bitCount);
+        },
+      };
+      expect(reveal(stego, spy)).toEqual({ ok: false, error: "corrupted" });
+      expect(reads).toEqual([HEADER_BITS]);
     });
   });
 

@@ -43,7 +43,8 @@ Error-correcting codes for DCT / QIM go on top of this frame (backlog).
 Only the stego codec (`hide`, `reveal`, `measure`, `capacity`) builds and reads frames; the frame and bit
 packing are internal to `stego-engine`. Methods receive bits and know nothing about the frame. `reveal`
 reads the header first, then the whole frame, and reports `no-message` (no valid header), `corrupted`
-(bad length, CRC or UTF-8) or `method-mismatch`. See ADR 5.
+(bad length, CRC or UTF-8) or `method-mismatch`. Messages are capped at `MAX_MESSAGE_BYTES` (64 KiB), which
+bounds what a forged length field can make `reveal` read. See ADR 5.
 
 ### Output is always lossless
 

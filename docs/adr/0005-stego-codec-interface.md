@@ -35,7 +35,14 @@ every call, so a caller had to carry the method and its parameters around as a p
   unknown method id, or an image too small for a header) is `no-message`. A payload length above the
   capacity, a CRC mismatch or invalid UTF-8 is `corrupted`. A valid frame with another method's id
   is `method-mismatch`. The length bound means a damaged length field never makes a method read
-  past what it can hold. Because the length and CRC are checked first, `method-mismatch` needs both
+  past what it can hold.
+- Messages are capped at `MAX_MESSAGE_BYTES` (64 KiB of UTF-8). `hide` and `measure` throw
+  `CapacityExceededError` above it, with `available` set to the cap, and `reveal` treats a longer
+  length field as `corrupted` after reading only the header. Bits cross the method seam one byte
+  per bit, so without the cap a forged frame could make `reveal` allocate the full capacity of a
+  4096 × 4096 image (about 50 MB for LSB at one bit per channel). With it, a reveal reads at most
+  about 0.5 MB. `capacity` still reports what the method can hold, so the lab's capacity metric is
+  unaffected. The API validates message length against the same constant. Because the length and CRC are checked first, `method-mismatch` needs both
   methods to share a bit layout. A frame from a method that embeds in another domain (LSB vs DCT)
   reads as noise and gives `no-message`, and one longer than this method's capacity gives
   `corrupted`.

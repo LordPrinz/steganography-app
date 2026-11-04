@@ -2,6 +2,7 @@ export {
   CapacityExceededError,
   capacity,
   hide,
+  MAX_MESSAGE_BYTES,
   type MeasureResult,
   measure,
   type RevealError,
