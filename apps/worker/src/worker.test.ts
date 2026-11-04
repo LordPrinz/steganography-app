@@ -29,7 +29,7 @@ function fakeJob(id: string, type: OperationType = "encode"): ClaimedJob {
 function fakeQueue(jobs: ClaimedJob[]) {
   const pending = [...jobs];
   return {
-    claim: mock(async () => pending.shift() ?? null),
+    claim: mock<JobQueue["claim"]>(async () => pending.shift() ?? null),
     extend: mock<JobQueue["extend"]>(async () => true),
     complete: mock<JobQueue["complete"]>(async () => true),
     fail: mock<JobQueue["fail"]>(async () => true),
@@ -185,18 +185,14 @@ describe("worker", () => {
 
   test("a queue error is logged and the loop keeps polling", async () => {
     const error = mock(() => {});
-    let calls = 0;
-    const queue = {
-      claim: mock(async () => {
-        calls++;
-        if (calls === 1) throw new Error("connection lost");
-        worker.stop();
-        return null;
-      }),
-      extend: mock<JobQueue["extend"]>(async () => true),
-      complete: mock<JobQueue["complete"]>(async () => true),
-      fail: mock<JobQueue["fail"]>(async () => true),
-    };
+    const queue = fakeQueue([]);
+    queue.claim.mockImplementationOnce(async () => {
+      throw new Error("connection lost");
+    });
+    queue.claim.mockImplementationOnce(async () => {
+      worker.stop();
+      return null;
+    });
     const worker = createWorker({
       queue,
       log: { error },

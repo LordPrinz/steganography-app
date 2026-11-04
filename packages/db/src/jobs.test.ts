@@ -1,27 +1,19 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { SQL } from "bun";
+import type { SQL } from "bun";
 import { backoffMs, createJobQueue, enqueueJob, JobError } from "./jobs.ts";
-import { migrate } from "./migrator.ts";
+import { createTestDatabase } from "./testing.ts";
 import type { JobRow, OperationRow } from "./types.ts";
 
-// Integration test: runs only when a disposable database is available (CI provides one).
-const url = Bun.env.TEST_DATABASE_URL;
-const schema = `test_${crypto.randomUUID().replaceAll("-", "")}`;
-const admin = url ? new SQL({ url, max: 1 }) : undefined;
-// Several connections, all pointed at the test schema, so concurrent claims really run in parallel.
-const sql = url ? new SQL({ url, max: 4, connection: { search_path: schema } }) : undefined;
+// Several connections, so concurrent claims really run in parallel.
+const testDb = createTestDatabase(4);
+const sql = testDb?.sql;
 
 beforeAll(async () => {
-  if (!admin || !sql) return;
-  await admin.unsafe(`CREATE SCHEMA ${schema}`);
-  await migrate(sql);
+  await testDb?.setup();
 });
 
 afterAll(async () => {
-  if (!admin || !sql) return;
-  await sql.close();
-  await admin.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
-  await admin.close();
+  await testDb?.teardown();
 });
 
 beforeEach(async () => {

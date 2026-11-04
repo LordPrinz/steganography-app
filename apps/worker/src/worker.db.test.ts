@@ -1,26 +1,18 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createJobQueue, type JobRow } from "@stego/db";
-import { migrate } from "@stego/db/migrator";
-import { SQL } from "bun";
+import { createTestDatabase } from "@stego/db/testing";
+import type { SQL } from "bun";
 import { createWorker } from "./worker.ts";
 
-// Integration test: runs only when a disposable database is available (CI provides one).
-const url = Bun.env.TEST_DATABASE_URL;
-const schema = `test_${crypto.randomUUID().replaceAll("-", "")}`;
-const admin = url ? new SQL({ url, max: 1 }) : undefined;
-const sql = url ? new SQL({ url, max: 2, connection: { search_path: schema } }) : undefined;
+const testDb = createTestDatabase();
+const sql = testDb?.sql;
 
 beforeAll(async () => {
-  if (!admin || !sql) return;
-  await admin.unsafe(`CREATE SCHEMA ${schema}`);
-  await migrate(sql);
+  await testDb?.setup();
 });
 
 afterAll(async () => {
-  if (!admin || !sql) return;
-  await sql.close();
-  await admin.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
-  await admin.close();
+  await testDb?.teardown();
 });
 
 describe.skipIf(!sql)("worker against Postgres", () => {
