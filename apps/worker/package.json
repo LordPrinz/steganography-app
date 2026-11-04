@@ -13,6 +13,7 @@
     "@stego/contracts": "workspace:*",
     "@stego/db": "workspace:*",
     "@stego/engine": "workspace:*",
-    "@stego/image-io": "workspace:*"
+    "@stego/image-io": "workspace:*",
+    "zod": "4.6.7"
   }
 }

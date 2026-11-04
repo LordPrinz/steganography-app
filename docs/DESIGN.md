@@ -63,6 +63,12 @@ Encoding and experiments (3 methods × N attack variants) run in `apps/worker`, 
 loop. The API inserts a `jobs` row; the worker picks it with `SELECT … FOR UPDATE SKIP LOCKED`; the
 frontend polls job status. The queue is not in Redis: jobs are durable and transactional with their rows.
 
+A failed attempt goes back to `queued` with exponential backoff (`run_after`) until `maxAttempts`, then
+`failed`. A job type without a handler fails at once. A `running` job whose `locked_at` is older than the
+lease is treated as abandoned by a crashed worker and claimed again, and `attempts` doubles as a fencing
+token, so the old owner can no longer complete it. On SIGTERM the worker stops claiming and finishes the job
+it holds. The operation's `status` follows its job.
+
 ### Redis for ephemeral state
 
 Rate-limit counters and small caches live in Redis behind a `KeyValueStore` port (Bun `RedisClient`).

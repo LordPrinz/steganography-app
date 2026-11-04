@@ -1,15 +1,26 @@
-const POLL_INTERVAL_MS = 1_000;
+import { createDb, createJobQueue } from "@stego/db";
+import { loadEnv } from "./env.ts";
+import type { JobHandlers } from "./handlers.ts";
+import { createWorker } from "./worker.ts";
 
-let running = true;
+const env = loadEnv();
+const sql = createDb(env.DATABASE_URL);
+// Encode, decode and experiment handlers are registered here as their issues land.
+const handlers: JobHandlers = {};
+const worker = createWorker({
+  queue: createJobQueue(sql),
+  handlers,
+  pollIntervalMs: env.WORKER_POLL_INTERVAL_MS,
+});
+
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
-  process.on(signal, () => {
-    running = false;
+  process.once(signal, () => {
+    console.info(`${signal} received, finishing the current job`);
+    worker.stop();
   });
 }
 
 console.info("Worker started");
-while (running) {
-  // Job pickup (SELECT … FOR UPDATE SKIP LOCKED) lands with the job queue issue.
-  await Bun.sleep(POLL_INTERVAL_MS);
-}
+await worker.run();
+await sql.close();
 console.info("Worker stopped");
