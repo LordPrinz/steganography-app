@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { SQL } from "bun";
-import { backoffMs, createJobQueue, enqueueJob } from "./jobs.ts";
+import { backoffMs, createJobQueue, enqueueJob, JobError } from "./jobs.ts";
 import { migrate } from "./migrator.ts";
 import type { JobRow, OperationRow } from "./types.ts";
 
@@ -33,6 +33,13 @@ describe("backoffMs", () => {
     expect([1, 2, 3, 4].map((a) => backoffMs(a, 1_000, 5_000))).toEqual([
       1_000, 2_000, 4_000, 5_000,
     ]);
+  });
+});
+
+describe("JobError", () => {
+  test("accepts short snake_case codes only", () => {
+    expect(new JobError("decode_failed").code).toBe("decode_failed");
+    expect(() => new JobError("Contains the message: hello")).toThrow(RangeError);
   });
 });
 
@@ -81,6 +88,21 @@ describe.skipIf(!sql)("job queue", () => {
       attempts: 0,
       locked_at: null,
     });
+  });
+
+  test("enqueue joins the caller's transaction and allows one job per operation", async () => {
+    const op = await newOperation();
+    const queue = createJobQueue(db);
+    await expect(
+      db.begin(async (tx) => {
+        await queue.enqueue(op.id, { tx });
+        throw new Error("rollback");
+      }),
+    ).rejects.toThrow("rollback");
+    expect(await db`SELECT id FROM jobs`).toHaveLength(0);
+
+    await queue.enqueue(op.id);
+    await expect(queue.enqueue(op.id)).rejects.toThrow();
   });
 
   test("claim marks the job and its operation running and returns the operation", async () => {
@@ -160,11 +182,11 @@ describe.skipIf(!sql)("job queue", () => {
     if (!first) throw new Error("expected a job");
 
     const before = Date.now();
-    expect(await queue.fail(first, new Error("boom"))).toBe(true);
+    expect(await queue.fail(first, new JobError("storage_unavailable"))).toBe(true);
     const retried = await jobRow(first.id);
     expect(retried).toMatchObject({
       status: "queued",
-      error: "boom",
+      error: "storage_unavailable",
       attempts: 1,
       locked_at: null,
     });
@@ -176,10 +198,11 @@ describe.skipIf(!sql)("job queue", () => {
     const second = await queue.claim();
     expect(second?.attempts).toBe(2);
     if (!second) throw new Error("expected a job");
-    await queue.fail(second, "still broken");
+    await queue.fail(second, new Error("secret text from user input"));
 
     const failed = await jobRow(first.id);
-    expect(failed).toMatchObject({ status: "failed", error: "still broken", attempts: 2 });
+    // Only JobError codes are stored; anything else could carry user data.
+    expect(failed).toMatchObject({ status: "failed", error: "internal_error", attempts: 2 });
     expect(failed.finished_at).toBeInstanceOf(Date);
     expect(await operationStatus(op.id)).toBe("failed");
   });
@@ -203,6 +226,8 @@ describe.skipIf(!sql)("job queue", () => {
 
     const reclaimed = await queue.claim();
     expect(reclaimed).toMatchObject({ id: stale.id, attempts: 2 });
+    expect(await queue.extend(stale)).toBe(false);
+    expect(await queue.extend(reclaimed as typeof stale)).toBe(true);
     expect(await queue.complete(stale)).toBe(false);
     expect(await queue.fail(stale, "late")).toBe(false);
     expect((await jobRow(stale.id)).status).toBe("running");
@@ -217,7 +242,11 @@ describe.skipIf(!sql)("job queue", () => {
     await db`UPDATE jobs SET locked_at = now() - interval '2 minutes' WHERE id = ${job.id}`;
 
     expect(await queue.claim()).toBeNull();
-    expect(await jobRow(job.id)).toMatchObject({ status: "failed", locked_at: null });
+    expect(await jobRow(job.id)).toMatchObject({
+      status: "failed",
+      error: "lease_expired",
+      locked_at: null,
+    });
     expect(await operationStatus(op.id)).toBe("failed");
   });
 });

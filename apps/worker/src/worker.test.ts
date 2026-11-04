@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { ClaimedJob, JobQueue, OperationType } from "@stego/db";
+import { type ClaimedJob, JobError, type JobQueue, type OperationType } from "@stego/db";
 import { createWorker } from "./worker.ts";
 
 const silent = { error: () => {} };
@@ -30,6 +30,7 @@ function fakeQueue(jobs: ClaimedJob[]) {
   const pending = [...jobs];
   return {
     claim: mock(async () => pending.shift() ?? null),
+    extend: mock<JobQueue["extend"]>(async () => true),
     complete: mock<JobQueue["complete"]>(async () => true),
     fail: mock<JobQueue["fail"]>(async () => true),
   };
@@ -74,7 +75,9 @@ describe("worker", () => {
     });
 
     await worker.run();
-    expect(queue.fail).toHaveBeenCalledWith(expect.objectContaining({ id: "a" }), boom);
+    expect(queue.fail).toHaveBeenCalledWith(expect.objectContaining({ id: "a" }), boom, {
+      retry: true,
+    });
     expect(queue.complete).not.toHaveBeenCalled();
   });
 
@@ -132,7 +135,7 @@ describe("worker", () => {
 
     const [job, error, options] = queue.fail.mock.calls[0] ?? [];
     expect(job?.id).toBe("a");
-    expect(String(error)).toContain('No handler for job type "experiment"');
+    expect(error).toEqual(new JobError("no_handler"));
     expect(options).toEqual({ retry: false });
   });
 
@@ -190,6 +193,7 @@ describe("worker", () => {
         worker.stop();
         return null;
       }),
+      extend: mock<JobQueue["extend"]>(async () => true),
       complete: mock<JobQueue["complete"]>(async () => true),
       fail: mock<JobQueue["fail"]>(async () => true),
     };
@@ -203,5 +207,51 @@ describe("worker", () => {
     await worker.run();
     expect(queue.claim).toHaveBeenCalledTimes(2);
     expect(error).toHaveBeenCalledWith("Job queue error:", expect.any(Error));
+  });
+
+  test("a job past its timeout is aborted and failed without retry", async () => {
+    const queue = fakeQueue([fakeJob("a")]);
+    let signal: AbortSignal | undefined;
+    const worker = createWorker({
+      queue,
+      log: silent,
+      jobTimeoutMs: 20,
+      handlers: {
+        encode: (_job, context) => {
+          signal = context.signal;
+          worker.stop();
+          return new Promise(() => {}); // never settles, ignores the signal
+        },
+      },
+    });
+
+    await worker.run();
+    expect(signal?.aborted).toBe(true);
+    const [, error, options] = queue.fail.mock.calls[0] ?? [];
+    expect(error).toEqual(new JobError("timeout"));
+    expect(options).toEqual({ retry: false });
+    expect(queue.complete).not.toHaveBeenCalled();
+  });
+
+  test("renews the lease while a job runs and aborts it once the lease is lost", async () => {
+    const queue = fakeQueue([fakeJob("a")]);
+    queue.extend.mockImplementation(async () => queue.extend.mock.calls.length < 3);
+    const worker = createWorker({
+      queue,
+      log: silent,
+      heartbeatMs: 5,
+      handlers: {
+        encode: (_job, { signal }) => {
+          worker.stop();
+          return new Promise((_, reject) => {
+            signal.addEventListener("abort", () => reject(signal.reason));
+          });
+        },
+      },
+    });
+
+    await worker.run();
+    expect(queue.extend).toHaveBeenCalledTimes(3);
+    expect(queue.fail.mock.calls[0]?.[1]).toEqual(new JobError("lease_lost"));
   });
 });

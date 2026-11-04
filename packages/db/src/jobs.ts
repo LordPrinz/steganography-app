@@ -17,8 +17,35 @@ export interface JobQueueOptions {
   /** Delay before the first retry; doubles with every further attempt. */
   backoffBaseMs?: number;
   backoffMaxMs?: number;
-  /** A running job whose lock is older than this is treated as abandoned (worker crashed) and claimed again. */
+  /**
+   * A running job whose lock is older than this is treated as abandoned (worker crashed) and claimed
+   * again. Workers renew it with extend() while a job runs, so it only has to outlast the heartbeat.
+   */
   leaseMs?: number;
+}
+
+/**
+ * A failure with a short public code, the only error text the queue stores. Free-form messages can carry
+ * user data (the hidden message must never reach the database), so any other error is stored as
+ * "internal_error" and its details stay in the worker log.
+ */
+export class JobError extends Error {
+  override readonly name = "JobError";
+
+  constructor(
+    readonly code: string,
+    options?: ErrorOptions,
+  ) {
+    if (!/^[a-z][a-z0-9_]{0,63}$/.test(code))
+      throw new RangeError(`Invalid job error code "${code}"`);
+    super(code, options);
+  }
+}
+
+export interface EnqueueOptions {
+  /** Enqueue inside this transaction, e.g. the one that inserts the operation. */
+  tx?: SQL;
+  runAfter?: Date;
 }
 
 export interface FailOptions {
@@ -27,8 +54,10 @@ export interface FailOptions {
 }
 
 export interface JobQueue {
-  enqueue(operationId: string): Promise<JobRow>;
+  enqueue(operationId: string, options?: EnqueueOptions): Promise<JobRow>;
   claim(): Promise<ClaimedJob | null>;
+  /** Heartbeat: renews the lease of a running job. Returns false once the job is no longer ours. */
+  extend(job: ClaimedJob): Promise<boolean>;
   /** Returns false when the job was no longer ours (lease expired and another worker claimed it). */
   complete(job: ClaimedJob, result?: Record<string, unknown> | null): Promise<boolean>;
   fail(job: ClaimedJob, error: unknown, options?: FailOptions): Promise<boolean>;
@@ -38,13 +67,12 @@ const DEFAULTS = {
   maxAttempts: 3,
   backoffBaseMs: 5_000,
   backoffMaxMs: 5 * 60_000,
-  leaseMs: 15 * 60_000,
+  leaseMs: 2 * 60_000,
 } satisfies Required<JobQueueOptions>;
-
-const MAX_ERROR_LENGTH = 2_000;
 
 /** Inserts a queued job. Pass a transaction to enqueue atomically with the operation row. */
 export async function enqueueJob(sql: SQL, operationId: string, runAfter?: Date): Promise<JobRow> {
+  // jobs.operation_id is unique: a second job for the same operation is a bug and throws.
   const [job] = await sql<JobRow[]>`
     INSERT INTO jobs (operation_id, run_after)
     VALUES (${operationId}, COALESCE(${runAfter ?? null}::timestamptz, now()))
@@ -77,7 +105,7 @@ export function createJobQueue(sql: SQL, options: JobQueueOptions = {}): JobQueu
     await sql`
       WITH dead AS (
         UPDATE jobs
-        SET status = 'failed', error = 'Lease expired: worker stopped while running the job',
+        SET status = 'failed', error = 'lease_expired',
             locked_at = NULL, finished_at = now()
         WHERE status = 'running'
           AND locked_at < now() - make_interval(secs => ${leaseSecs})
@@ -89,7 +117,7 @@ export function createJobQueue(sql: SQL, options: JobQueueOptions = {}): JobQueu
   }
 
   return {
-    enqueue: (operationId) => enqueueJob(sql, operationId),
+    enqueue: (operationId, { tx, runAfter } = {}) => enqueueJob(tx ?? sql, operationId, runAfter),
 
     async claim() {
       await failAbandoned();
@@ -125,6 +153,15 @@ export function createJobQueue(sql: SQL, options: JobQueueOptions = {}): JobQueu
       return job ?? null;
     },
 
+    async extend(job) {
+      const renewed = await sql`
+        UPDATE jobs SET locked_at = now()
+        WHERE id = ${job.id} AND status = 'running' AND attempts = ${job.attempts}
+        RETURNING id
+      `;
+      return renewed.length > 0;
+    },
+
     async complete(job, result = null) {
       return sql.begin(async (tx) => {
         // attempts acts as a fencing token: after a lease expiry another worker owns a higher attempt.
@@ -143,18 +180,18 @@ export function createJobQueue(sql: SQL, options: JobQueueOptions = {}): JobQueu
     },
 
     async fail(job, error, { retry = true } = {}) {
-      const message = errorMessage(error);
+      const code = errorMessage(error);
       const final = !retry || job.attempts >= maxAttempts;
       const delaySecs = backoffMs(job.attempts, backoffBaseMs, backoffMaxMs) / 1000;
       return sql.begin(async (tx) => {
         const updated = final
           ? await tx`
-              UPDATE jobs SET status = 'failed', error = ${message}, locked_at = NULL, finished_at = now()
+              UPDATE jobs SET status = 'failed', error = ${code}, locked_at = NULL, finished_at = now()
               WHERE id = ${job.id} AND status = 'running' AND attempts = ${job.attempts}
               RETURNING id
             `
           : await tx`
-              UPDATE jobs SET status = 'queued', error = ${message}, locked_at = NULL,
+              UPDATE jobs SET status = 'queued', error = ${code}, locked_at = NULL,
                               run_after = now() + make_interval(secs => ${delaySecs})
               WHERE id = ${job.id} AND status = 'running' AND attempts = ${job.attempts}
               RETURNING id
@@ -171,6 +208,5 @@ export function createJobQueue(sql: SQL, options: JobQueueOptions = {}): JobQueu
 }
 
 function errorMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.slice(0, MAX_ERROR_LENGTH);
+  return error instanceof JobError ? error.code : "internal_error";
 }

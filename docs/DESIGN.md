@@ -64,10 +64,15 @@ loop. The API inserts a `jobs` row; the worker picks it with `SELECT … FOR UPD
 frontend polls job status. The queue is not in Redis: jobs are durable and transactional with their rows.
 
 A failed attempt goes back to `queued` with exponential backoff (`run_after`) until `maxAttempts`, then
-`failed`. A job type without a handler fails at once. A `running` job whose `locked_at` is older than the
-lease is treated as abandoned by a crashed worker and claimed again, and `attempts` doubles as a fencing
-token, so the old owner can no longer complete it. On SIGTERM the worker stops claiming and finishes the job
-it holds. The operation's `status` follows its job.
+`failed`. A job type without a handler, or one that runs past its timeout (10 min by default), fails at once.
+While a job runs the worker renews `locked_at` every 30 s. A `running` job whose lock is older than the
+2-minute lease was left by a crashed worker and is claimed again. `attempts` doubles as a fencing token, so
+the old owner can no longer renew or complete it. On SIGTERM the worker stops claiming and finishes the job
+it holds. The operation's `status` follows its job, and each operation has at most one job.
+
+`jobs.error` holds a short code from `JobError` (`timeout`, `no_handler`, …), never a free-form message;
+any other error is stored as `internal_error` and its details go only to the worker log. Handler results
+land in `operations.result`, so they must not contain the hidden message either.
 
 ### Redis for ephemeral state
 

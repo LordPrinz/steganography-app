@@ -11,6 +11,7 @@ const worker = createWorker({
   queue: createJobQueue(sql),
   handlers,
   pollIntervalMs: env.WORKER_POLL_INTERVAL_MS,
+  jobTimeoutMs: env.WORKER_JOB_TIMEOUT_MS,
 });
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
