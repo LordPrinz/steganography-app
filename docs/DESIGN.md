@@ -40,6 +40,11 @@ Every method embeds the same frame: `magic "SG" | version | method id | length (
 noise read out of a clean image; without it "decoding success" and "detection" are undefined.
 Error-correcting codes for DCT / QIM go on top of this frame (backlog).
 
+Only the stego codec (`hide`, `reveal`, `measure`, `capacity`) builds and reads frames; the frame and bit
+packing are internal to `stego-engine`. Methods receive bits and know nothing about the frame. `reveal`
+reads the header first, then the whole frame, and reports `no-message` (no valid header), `corrupted`
+(bad length, CRC or UTF-8) or `method-mismatch`. See ADR 5.
+
 ### Output is always lossless
 
 Encoded images are stored and served as PNG, byte-for-byte. JPEG input is decoded to pixels first.
@@ -113,13 +118,13 @@ A library is added only when Bun has no equivalent (zod for validation, Next.js 
 
 ## Metrics
 
-| Metric         | Meaning                                      |
-| -------------- | -------------------------------------------- |
-| Decode success | Frame decoded and CRC matches                |
-| BER            | Bit error rate of the payload bits           |
-| PSNR / SSIM    | Visual quality, computed on luminance        |
-| Capacity       | Payload bytes that fit, after frame overhead |
-| Time           | Encode / decode duration                     |
+| Metric         | Meaning                                                                                             |
+| -------------- | --------------------------------------------------------------------------------------------------- |
+| Decode success | Frame decoded and CRC matches                                                                       |
+| BER            | Share of payload bits (UTF-8 message, no header or CRC) read wrong; defined even when the CRC fails |
+| PSNR / SSIM    | Visual quality, computed on luminance                                                               |
+| Capacity       | UTF-8 message bytes that fit, after frame overhead                                                  |
+| Time           | Encode / decode duration                                                                            |
 
 ## Data model
 
