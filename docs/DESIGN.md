@@ -14,6 +14,7 @@ The robustness lab is the core of the project; accounts and gallery are standard
 
 ```
 web (Next.js) ──/api/v1/* rewrite──▶ api (Bun.serve) ──▶ Postgres (jobs, metadata)
+                                        ├──▶ Redis (rate limits, cache)
                                         │                    ▲
                                         ▼                    │
                                   R2 / RustFS ◀─────── worker (Bun)
@@ -59,7 +60,13 @@ Blind resynchronisation is out of scope.
 
 Encoding and experiments (3 methods × N attack variants) run in `apps/worker`, never on the API event
 loop. The API inserts a `jobs` row; the worker picks it with `SELECT … FOR UPDATE SKIP LOCKED`; the
-frontend polls job status. No Redis.
+frontend polls job status. The queue is not in Redis: jobs are durable and transactional with their rows.
+
+### Redis for ephemeral state
+
+Rate-limit counters and small caches live in Redis behind a `KeyValueStore` port (Bun `RedisClient`).
+Only losable, short-lived data goes there; anything durable stays in Postgres. `GET /api/v1/health/ready`
+reports 503 when Redis is down. See ADR 3.
 
 ### Image processing on Bun.Image
 
@@ -80,7 +87,7 @@ get a C implementation via `bun:ffi` behind the same interface, verified against
 
 ### Bun built-ins over libraries
 
-Bun ships what this project needs: `Bun.serve` (routing), `Bun.SQL` (Postgres), `Bun.s3` (R2 / RustFS,
+Bun ships what this project needs: `Bun.serve` (routing), `Bun.SQL` (Postgres), `RedisClient` (Redis), `Bun.s3` (R2 / RustFS,
 presigned URLs), `Bun.password`, `Bun.Image`, `Bun.hash.crc32`, `bun:test`, `bun:ffi`. A library is added
 only when Bun has no equivalent (zod for validation, Next.js and React for the UI). See ADR 2.
 

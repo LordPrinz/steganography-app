@@ -17,6 +17,23 @@ services:
       timeout: 3s
       retries: 10
 
+  # Rate limits and short-lived shared state (ADR 0003). Local-only password.
+  redis:
+    image: redis:8-alpine
+    command:
+      ["redis-server", "--requirepass", "bZ8tiXpk7Bc3jiKAkWnew0djVsDoyUt4", "--appendonly", "yes"]
+    environment:
+      REDISCLI_AUTH: bZ8tiXpk7Bc3jiKAkWnew0djVsDoyUt4
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   # S3-compatible stand-in for Cloudflare R2 (MinIO no longer publishes images).
   rustfs:
     image: rustfs/rustfs:1.0.4
@@ -51,3 +68,4 @@ services:
 volumes:
   postgres-data:
   rustfs-data:
+  redis-data:
