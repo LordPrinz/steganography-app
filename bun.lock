@@ -67,6 +67,10 @@
       "name": "@stego/image-io",
       "version": "0.0.0",
     },
+    "packages/native": {
+      "name": "@stego/native",
+      "version": "0.0.0",
+    },
     "packages/stego-engine": {
       "name": "@stego/engine",
       "version": "0.0.0",
@@ -190,6 +194,8 @@
     "@stego/engine": ["@stego/engine@workspace:packages/stego-engine"],
 
     "@stego/image-io": ["@stego/image-io@workspace:packages/image-io"],
+
+    "@stego/native": ["@stego/native@workspace:packages/native"],
 
     "@stego/web": ["@stego/web@workspace:apps/web"],
 

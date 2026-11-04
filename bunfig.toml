@@ -4,3 +4,4 @@ exact = true
 [test]
 root = "."
 coverageSkipTestFiles = true
+preload = ["./packages/native/preload.ts"]
