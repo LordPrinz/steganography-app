@@ -9,8 +9,6 @@
  * fully inside the image. That is scikit-image's structural_similarity with gaussian_weights=True,
  * sigma=1.5, use_sample_covariance=False, data_range=255.
  */
-#include <stdlib.h>
-
 #include "common.h"
 
 #define SSIM_WINDOW STEGO_SSIM_MIN_SIDE
@@ -67,16 +65,17 @@ static void load_row(const uint8_t *rgba, uint32_t width, uint32_t row, double *
 }
 
 int32_t stego_luma_ssim(const uint8_t *a, uint64_t a_bytes, const uint8_t *b, uint64_t b_bytes,
-                        uint32_t width, uint32_t height, double *ssim, uint64_t ssim_bytes) {
+                        uint32_t width, uint32_t height, double *scratch, uint64_t scratch_bytes,
+                        double *ssim, uint64_t ssim_bytes) {
   uint64_t n = 0;
   int32_t status = pair_check(a, a_bytes, b, b_bytes, width, height, ssim, ssim_bytes, &n);
   if (status != STEGO_OK) return status;
+  if (!scratch) return STEGO_E_NULL;
   if (width < SSIM_WINDOW || height < SSIM_WINDOW) return STEGO_E_DIMENSIONS;
+  uint64_t w = width;
+  if (scratch_bytes != STEGO_SSIM_SCRATCH_ROWS * w * sizeof(double)) return STEGO_E_LENGTH;
 
   /* Two rings of 11 luminance rows, then five rows of vertically filtered sums. */
-  uint64_t w = width;
-  double *scratch = malloc((2 * SSIM_WINDOW + 5) * w * sizeof(double));
-  if (!scratch) return STEGO_E_MEMORY;
   double *ya = scratch, *yb = ya + SSIM_WINDOW * w;
   double *mx = yb + SSIM_WINDOW * w, *my = mx + w, *mxx = my + w, *myy = mxx + w, *mxy = myy + w;
 
@@ -125,7 +124,6 @@ int32_t stego_luma_ssim(const uint8_t *a, uint64_t a_bytes, const uint8_t *b, ui
     }
   }
 
-  free(scratch);
   *ssim = total / ((double)out_w * out_h);
   return STEGO_OK;
 }

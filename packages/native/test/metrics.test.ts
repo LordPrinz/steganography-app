@@ -35,7 +35,8 @@ const psnrOf = (mse: number) => 10 * Math.log10((255 * 255) / mse);
 
 /*
  * Reference values from scikit-image 0.26.0 (numpy 2.5.5) on the same images, rebuilt in Python
- * with the same xorshift generator and luminance rounded to float32:
+ * with the same xorshift generator and luminance rounded to float32. oracle/ssim_reference.py
+ * produces them; its header has the command. It calls:
  *   structural_similarity(ya, yb, data_range=255, gaussian_weights=True, sigma=1.5,
  *                         use_sample_covariance=False)
  *   peak_signal_noise_ratio(ya, yb, data_range=255)
@@ -176,10 +177,14 @@ describe("C-side validation (bypassing the client)", () => {
     expect(native().stego_luma_mse(a, a, a.subarray(1), a.subarray(1), 11, 11, out, out)).toBe(-3);
     expect(native().stego_luma_mse(a, a, a, a, 11, 11, out, new Float32Array(1))).toBe(-3);
     expect(native().stego_luma_mse(a, a, a, a, 0, 11, out, out)).toBe(-2);
-    expect(native().stego_luma_ssim(a, a, a, a, 11, 11, out, out)).toBe(0);
-    expect(native().stego_luma_ssim(a, a, a, a, 10, 11, out, out)).toBe(-3);
-    const small = a.subarray(44);
-    expect(native().stego_luma_ssim(small, small, small, small, 10, 11, out, out)).toBe(-2);
+    const scratch = new Float64Array(11 * 27);
+    const ssim = (image: Uint8Array, width: number, buffer = scratch) =>
+      native().stego_luma_ssim(image, image, image, image, width, 11, buffer, buffer, out, out);
+    expect(ssim(a, 11)).toBe(0);
+    expect(ssim(a, 10)).toBe(-3);
+    expect(ssim(a.subarray(44), 10)).toBe(-2);
+    expect(ssim(a, 11, scratch.subarray(1))).toBe(-3);
+    expect(ssim(a, 11, new Float64Array(11 * 27 + 1))).toBe(-3);
   });
 
   test("reports bit arrays of different lengths", () => {

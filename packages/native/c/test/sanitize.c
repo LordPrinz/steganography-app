@@ -232,7 +232,8 @@ static void lsb_invalid(void) {
 static void metrics_case(uint32_t w, uint32_t h) {
   uint64_t n = (uint64_t)w * h;
   uint8_t *a = alloc(n * 4), *b = alloc(n * 4);
-  double *out = alloc(sizeof(double));
+  uint64_t sb = (uint64_t)w * STEGO_SSIM_SCRATCH_ROWS * sizeof(double);
+  double *out = alloc(sizeof(double)), *scratch = alloc(sb);
   uint64_t *errors = alloc(sizeof(uint64_t));
   for (uint64_t i = 0; i < n * 4; i++)
     a[i] = next_byte();
@@ -242,7 +243,7 @@ static void metrics_case(uint32_t w, uint32_t h) {
   EXPECT(*out == 0.0);
   int32_t expected =
       w >= STEGO_SSIM_MIN_SIDE && h >= STEGO_SSIM_MIN_SIDE ? STEGO_OK : STEGO_E_DIMENSIONS;
-  EXPECT(stego_luma_ssim(a, n * 4, b, n * 4, w, h, out, sizeof(double)) == expected);
+  EXPECT(stego_luma_ssim(a, n * 4, b, n * 4, w, h, scratch, sb, out, sizeof(double)) == expected);
   if (expected == STEGO_OK) EXPECT(*out == 1.0);
 
   /* Treated as bit arrays, the two buffers differ exactly where the low bit was flipped. */
@@ -253,32 +254,44 @@ static void metrics_case(uint32_t w, uint32_t h) {
   EXPECT(stego_luma_mse(a, n * 4, b, n * 4, w, h, out, sizeof(double)) == STEGO_OK);
   EXPECT(*out > 0.0);
   if (expected == STEGO_OK) {
-    EXPECT(stego_luma_ssim(a, n * 4, b, n * 4, w, h, out, sizeof(double)) == STEGO_OK);
+    EXPECT(stego_luma_ssim(a, n * 4, b, n * 4, w, h, scratch, sb, out, sizeof(double)) == STEGO_OK);
     EXPECT(*out < 1.0);
   }
 
   /* Buffers one byte off are rejected before any access. */
   EXPECT(stego_luma_mse(a, n * 4 - 1, b, n * 4, w, h, out, sizeof(double)) == STEGO_E_LENGTH);
-  EXPECT(stego_luma_ssim(a, n * 4, b, n * 4 + 1, w, h, out, sizeof(double)) == STEGO_E_LENGTH);
-  EXPECT(stego_luma_ssim(a, n * 4, b, n * 4, w, h, out, sizeof(double) - 1) == STEGO_E_LENGTH);
+  EXPECT(stego_luma_ssim(a, n * 4, b, n * 4 + 1, w, h, scratch, sb, out, sizeof(double)) ==
+         STEGO_E_LENGTH);
+  EXPECT(stego_luma_ssim(a, n * 4, b, n * 4, w, h, scratch, sb, out, sizeof(double) - 1) ==
+         STEGO_E_LENGTH);
   EXPECT(stego_bit_errors(a, n * 4, b, n * 4 - 1, errors, sizeof(uint64_t)) == STEGO_E_LENGTH);
+  if (expected == STEGO_OK) {
+    EXPECT(stego_luma_ssim(a, n * 4, b, n * 4, w, h, scratch, sb - 1, out, sizeof(double)) ==
+           STEGO_E_LENGTH);
+    EXPECT(stego_luma_ssim(a, n * 4, b, n * 4, w, h, scratch, sb + 1, out, sizeof(double)) ==
+           STEGO_E_LENGTH);
+  }
 
   free(a);
   free(b);
   free(out);
+  free(scratch);
   free(errors);
 }
 
 static void metrics_invalid(void) {
   uint8_t a[4] = {0};
-  double out = 0;
+  double out = 0, scratch[STEGO_SSIM_SCRATCH_ROWS] = {0};
   uint64_t errors = 0;
 
   EXPECT(stego_luma_mse(NULL, 4, a, 4, 1, 1, &out, sizeof out) == STEGO_E_NULL);
   EXPECT(stego_luma_mse(a, 4, NULL, 4, 1, 1, &out, sizeof out) == STEGO_E_NULL);
   EXPECT(stego_luma_mse(a, 4, a, 4, 1, 1, NULL, sizeof out) == STEGO_E_NULL);
-  EXPECT(stego_luma_ssim(NULL, 4, a, 4, 1, 1, &out, sizeof out) == STEGO_E_NULL);
-  EXPECT(stego_luma_ssim(a, 4, a, 4, 1, 1, NULL, sizeof out) == STEGO_E_NULL);
+  EXPECT(stego_luma_ssim(NULL, 4, a, 4, 1, 1, scratch, sizeof scratch, &out, sizeof out) ==
+         STEGO_E_NULL);
+  EXPECT(stego_luma_ssim(a, 4, a, 4, 1, 1, scratch, sizeof scratch, NULL, sizeof out) ==
+         STEGO_E_NULL);
+  EXPECT(stego_luma_ssim(a, 4, a, 4, 1, 1, NULL, sizeof scratch, &out, sizeof out) == STEGO_E_NULL);
   EXPECT(stego_bit_errors(NULL, 4, a, 4, &errors, sizeof errors) == STEGO_E_NULL);
   EXPECT(stego_bit_errors(a, 4, a, 4, NULL, sizeof errors) == STEGO_E_NULL);
   /* Empty bit arrays may come without a pointer. */
@@ -289,8 +302,8 @@ static void metrics_invalid(void) {
   for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
     EXPECT(stego_luma_mse(a, 4, a, 4, bad[i][0], bad[i][1], &out, sizeof out) ==
            STEGO_E_DIMENSIONS);
-    EXPECT(stego_luma_ssim(a, 4, a, 4, bad[i][0], bad[i][1], &out, sizeof out) ==
-           STEGO_E_DIMENSIONS);
+    EXPECT(stego_luma_ssim(a, 4, a, 4, bad[i][0], bad[i][1], scratch, sizeof scratch, &out,
+                           sizeof out) == STEGO_E_DIMENSIONS);
   }
 }
 

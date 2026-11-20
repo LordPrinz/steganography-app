@@ -97,6 +97,8 @@ const symbols = {
       "u32",
       "buffer",
       "buffer_length",
+      "buffer",
+      "buffer_length",
     ],
     returns: "i32",
   },

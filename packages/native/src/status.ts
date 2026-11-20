@@ -4,15 +4,11 @@ const STATUS = {
   [-2]: "invalid-dimensions",
   [-3]: "length-mismatch",
   [-4]: "invalid-argument",
-  [-5]: "out-of-memory",
 } as const satisfies Record<number, string>;
 
 export type NativeStatus = (typeof STATUS)[keyof typeof STATUS] | "unknown";
 
-/**
- * A kernel rejected its arguments or could not allocate scratch memory. The client validates first,
- * so anything but `out-of-memory` signals a bug in the client.
- */
+/** A kernel rejected its arguments. The client validates first, so this signals a bug in the client. */
 export class NativeKernelError extends Error {
   override readonly name = "NativeKernelError";
   constructor(
