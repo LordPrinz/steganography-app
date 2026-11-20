@@ -38,8 +38,14 @@ describe("jpeg", () => {
     expect(meanError(gradient, q20)).toBeGreaterThan(0);
   });
 
-  test("rejects a quality outside 1–100", async () => {
-    await expect(applyAttack(gradient, { type: "jpeg", quality: 0 })).rejects.toThrow(RangeError);
+  test("makes the image opaque", async () => {
+    const translucent = { ...gradient, data: gradient.data.map((v, i) => (i % 4 === 3 ? 100 : v)) };
+    const result = await applyAttack(translucent, { type: "jpeg", quality: 90 });
+    for (let i = 3; i < result.data.length; i += 4) expect(result.data[i]).toBe(255);
+  });
+
+  test.each([0, 101, 75.5])("rejects quality %p without schema parsing", async (quality) => {
+    await expect(applyAttack(gradient, { type: "jpeg", quality })).rejects.toThrow(RangeError);
   });
 });
 
@@ -47,9 +53,19 @@ describe("resize", () => {
   test("scales both sides and rounds to whole pixels", async () => {
     const half = await applyAttack(gradient, { type: "resize", scale: 0.5 });
     expect([half.width, half.height]).toEqual([32, 24]);
-    const tiny = await applyAttack(gradient, { type: "resize", scale: 0.01 });
-    expect([tiny.width, tiny.height]).toEqual([1, 1]);
+    const smallest = await applyAttack(gradient, { type: "resize", scale: 0.1 });
+    expect([smallest.width, smallest.height]).toEqual([6, 5]);
+    const pixel = { width: 1, height: 1, data: Uint8ClampedArray.of(1, 2, 3, 255) };
+    const kept = await applyAttack(pixel, { type: "resize", scale: 0.1 });
+    expect([kept.width, kept.height]).toEqual([1, 1]);
   });
+
+  test.each([0, -0.5, 1.5, Number.NaN])(
+    "rejects scale %p without schema parsing",
+    async (scale) => {
+      await expect(applyAttack(gradient, { type: "resize", scale })).rejects.toThrow(RangeError);
+    },
+  );
 
   test("is scaled back to the original size at the end of a scenario", async () => {
     const result = await applyScenario(gradient, [{ type: "resize", scale: 0.5 }]);
@@ -62,6 +78,10 @@ describe("blur", () => {
   test("is the native Gaussian blur", async () => {
     const blurred = await applyAttack(gradient, { type: "blur", sigma: 1.5 });
     expect(blurred.data).toEqual(gaussianBlur(gradient, 1.5).data);
+  });
+
+  test.each([0, -1, 33, Number.NaN])("rejects sigma %p without schema parsing", async (sigma) => {
+    await expect(applyAttack(gradient, { type: "blur", sigma })).rejects.toThrow(RangeError);
   });
 
   test("flattens a checkerboard to grey away from the edges", async () => {
@@ -111,14 +131,5 @@ describe("applyScenario", () => {
       { type: "blur", sigma: 1 },
     ]);
     expect(blurFirst.data).not.toEqual(resizeFirst.data);
-  });
-
-  test("does not mutate its input", async () => {
-    const copy = gradient.data.slice();
-    await applyScenario(gradient, [
-      { type: "blur", sigma: 2 },
-      { type: "jpeg", quality: 50 },
-    ]);
-    expect(gradient.data).toEqual(copy);
   });
 });

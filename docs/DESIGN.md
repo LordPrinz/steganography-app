@@ -103,7 +103,10 @@ Parameters are relative, so one scenario fits any image. `image-io` maps each at
 implementation in one registry (`applyAttack`), and `applyScenario` runs the list in order on RGBA
 pixels. A resize changes the size for the attacks after it, as when a downscaled image is then
 recompressed; `applyScenario` scales the final result back to the original size (non-blind decoding,
-above).
+above). Both resizes use the Lanczos-3 filter. A JPEG step drops transparency (alpha becomes 255).
+The attacks reject parameters they cannot run, but only the schema enforces the lab's ranges, so the
+API must parse every scenario with `Scenario` before it reaches the worker. Every attack passes a shared
+contract suite (`image-io/test/attack-contract.test.ts`).
 
 ### Pixel kernels in C
 
