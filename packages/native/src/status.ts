@@ -4,6 +4,7 @@ const STATUS = {
   [-2]: "invalid-dimensions",
   [-3]: "length-mismatch",
   [-4]: "invalid-argument",
+  [-5]: "embed-failed",
 } as const satisfies Record<number, string>;
 
 export type NativeStatus = (typeof STATUS)[keyof typeof STATUS] | "unknown";

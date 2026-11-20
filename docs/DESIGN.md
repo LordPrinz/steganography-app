@@ -59,6 +59,12 @@ DCT and DWT embed in luminance (Y of YCbCr): JPEG keeps luma at full resolution 
 Rounding / clipping to 0–255 after the inverse transform can flip bits even without an attack, so every
 method's round-trip test without attacks must recover the payload exactly.
 
+Koch–Zhao embeds one bit per whole 8 × 8 block of Y by pushing the magnitudes of two DCT coefficients at
+least P apart. The pair is (3,2) vs (2,3) and P is 40, chosen from measurements on natural images: the
+default survives JPEG quality 75, and quality 50 with Hamming(7,4). Embedding checks every block the way
+extraction reads it and retries with a larger margin when rounding or clipping spoils it, so the round
+trip is exact. See ADR 7.
+
 ### Decoding after resizing
 
 Resizing breaks the 8×8 / wavelet grid. The lab uses **non-blind** decoding for resize scenarios: the
