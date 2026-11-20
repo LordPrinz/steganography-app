@@ -124,8 +124,15 @@ A library is added only when Bun has no equivalent (zod for validation, Next.js 
 | Decode success | Frame decoded and CRC matches                                                                       |
 | BER            | Share of payload bits (UTF-8 message, no header or CRC) read wrong; defined even when the CRC fails |
 | PSNR / SSIM    | Visual quality, computed on luminance                                                               |
-| Capacity       | UTF-8 message bytes that fit, after frame overhead                                                  |
-| Time           | Encode / decode duration                                                                            |
+
+PSNR and SSIM compare the luminance (Y, as the transform methods use it) of cover and stego image; alpha
+is ignored. PSNR is `Infinity` for identical images. SSIM uses the parameters of Wang et al. 2004 (11 × 11
+Gaussian window, σ = 1.5, K1 = 0.01, K2 = 0.03, L = 255), averaged over every window that fits inside the
+image, so both sides must be at least 11 pixels. It matches scikit-image's `structural_similarity` with
+`gaussian_weights=True, sigma=1.5, use_sample_covariance=False`. All three are exported from `stego-engine`
+as `psnr`, `ssim` and `ber`.
+| Capacity | UTF-8 message bytes that fit, after frame overhead |
+| Time | Encode / decode duration |
 
 ## Data model
 
