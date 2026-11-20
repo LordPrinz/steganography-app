@@ -31,7 +31,7 @@ int32_t stego_lsb_embed(const uint8_t *rgba, uint64_t rgba_bytes, uint32_t width
   if (!out) return STEGO_E_NULL;
   if (out_bytes != rgba_bytes) return STEGO_E_LENGTH;
 
-  memcpy(out, rgba, rgba_bytes);
+  memmove(out, rgba, rgba_bytes);
   for (uint64_t i = 0; i < bit_count; i++) {
     uint64_t at = channel_offset(i / bits_per_channel);
     unsigned shift = bits_per_channel - 1 - (unsigned)(i % bits_per_channel);

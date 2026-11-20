@@ -1,4 +1,4 @@
-import { lsbCapacityBits, lsbEmbed, lsbExtract } from "@stego/native";
+import { assertBitsPerChannel, lsbCapacityBits, lsbEmbed, lsbExtract } from "@stego/native";
 import { type ConfiguredMethod, MethodId } from "../types.ts";
 
 export interface LsbParams {
@@ -8,8 +8,7 @@ export interface LsbParams {
 
 /** Least significant bit embedding in the colour channels; the pixel loops run in `@stego/native`. */
 export function lsb({ bitsPerChannel }: LsbParams): ConfiguredMethod {
-  // Throws RangeError for a bad bitsPerChannel here, where the method is configured.
-  lsbCapacityBits(1, 1, bitsPerChannel);
+  assertBitsPerChannel(bitsPerChannel);
   return {
     id: MethodId.Lsb,
     capacityBits: (width, height) => lsbCapacityBits(width, height, bitsPerChannel),

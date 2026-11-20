@@ -5,7 +5,8 @@ import { check } from "./status.ts";
 /** Mirrors STEGO_LSB_MAX_BITS in c/stego.h. */
 export const LSB_MAX_BITS_PER_CHANNEL = 8;
 
-function assertBitsPerChannel(bitsPerChannel: number): void {
+/** Throws a RangeError unless `bitsPerChannel` is an integer the LSB kernels accept. */
+export function assertBitsPerChannel(bitsPerChannel: number): void {
   if (
     !Number.isInteger(bitsPerChannel) ||
     bitsPerChannel < 1 ||

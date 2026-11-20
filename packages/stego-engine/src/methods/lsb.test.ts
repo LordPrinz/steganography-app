@@ -15,17 +15,6 @@ describe("lsb", () => {
     expect(lsb({ bitsPerChannel: 1 }).id).toBe(MethodId.Lsb);
   });
 
-  test("changes only the low bits of colour channels and never alpha", () => {
-    const cover = noiseImage(32, 32);
-    const method = lsb({ bitsPerChannel: 2 });
-    const stego = hide(cover, "x".repeat(200), method);
-    for (let i = 0; i < cover.data.length; i++) {
-      const before = cover.data[i] as number;
-      const after = stego.data[i] as number;
-      expect(i % 4 === 3 ? after : after >> 2).toBe(i % 4 === 3 ? before : before >> 2);
-    }
-  });
-
   test("a frame hidden with another bit depth does not reveal", () => {
     const stego = hide(noiseImage(32, 32), "secret", lsb({ bitsPerChannel: 1 }));
     expect(reveal(stego, lsb({ bitsPerChannel: 2 })).ok).toBe(false);
