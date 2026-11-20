@@ -97,4 +97,29 @@ int32_t stego_blur_separable(const uint8_t *rgba, uint64_t rgba_bytes, uint32_t 
                              double *scratch, uint64_t scratch_bytes, uint8_t *out,
                              uint64_t out_bytes);
 
+/*
+ * Mean squared error between the luminance (Y as in stego_rgba_to_ycbcr) of two RGBA images of the
+ * same size, written to *mse. Alpha is ignored.
+ */
+int32_t stego_luma_mse(const uint8_t *a, uint64_t a_bytes, const uint8_t *b, uint64_t b_bytes,
+                       uint32_t width, uint32_t height, double *mse, uint64_t mse_bytes);
+
+/* Smallest side SSIM accepts: one 11 x 11 window. */
+#define STEGO_SSIM_MIN_SIDE 11u
+/* Rows of width doubles in the SSIM scratch buffer. */
+#define STEGO_SSIM_SCRATCH_ROWS (2u * STEGO_SSIM_MIN_SIDE + 5u)
+
+/*
+ * Mean SSIM (Wang et al. 2004, 11 x 11 Gaussian window, sigma 1.5, K1 0.01, K2 0.03, L 255)
+ * between the luminance of two RGBA images of the same size, written to *ssim. scratch holds
+ * width * STEGO_SSIM_SCRATCH_ROWS doubles.
+ */
+int32_t stego_luma_ssim(const uint8_t *a, uint64_t a_bytes, const uint8_t *b, uint64_t b_bytes,
+                        uint32_t width, uint32_t height, double *scratch, uint64_t scratch_bytes,
+                        double *ssim, uint64_t ssim_bytes);
+
+/* Counts positions where the lowest bits of a and b differ (one bit per byte, equal lengths). */
+int32_t stego_bit_errors(const uint8_t *a, uint64_t a_bytes, const uint8_t *b, uint64_t b_bytes,
+                         uint64_t *errors, uint64_t errors_bytes);
+
 #endif

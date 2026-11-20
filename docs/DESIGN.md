@@ -144,6 +144,13 @@ A library is added only when Bun has no equivalent (zod for validation, Next.js 
 | Capacity       | UTF-8 message bytes that fit, after the error-correcting code (if any) and frame overhead                                               |
 | Time           | Encode / decode duration                                                                                                                |
 
+PSNR and SSIM compare the luminance (Y, as the transform methods use it) of cover and stego image; alpha
+is ignored. PSNR is `Infinity` for identical images. SSIM uses the parameters of Wang et al. 2004 (11 × 11
+Gaussian window, σ = 1.5, K1 = 0.01, K2 = 0.03, L = 255), averaged over every window that fits inside the
+image, so both sides must be at least 11 pixels. It matches scikit-image's `structural_similarity` with
+`gaussian_weights=True, sigma=1.5, use_sample_covariance=False`. All three are exported from `stego-engine`
+as `psnr`, `ssim` and `ber`.
+
 ## Data model
 
 Defined in `packages/db/migrations/*.sql`, mirrored by row types in `packages/db/src/types.ts`:
