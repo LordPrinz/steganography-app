@@ -111,6 +111,67 @@ static void color_invalid(void) {
   }
 }
 
+static void png_case(uint32_t w, uint32_t h) {
+  uint64_t n = (uint64_t)w * h, lines = n * 4 + h, rgb_lines = n * 3 + h;
+  uint8_t *rgba = alloc(n * 4), *out = alloc(n * 4), *filtered = alloc(lines),
+          *rgb = alloc(rgb_lines);
+  for (uint64_t i = 0; i < n * 4; i++)
+    rgba[i] = next_byte();
+
+  for (uint32_t f = 0; f <= STEGO_PNG_FILTER_ADAPTIVE; f++) {
+    EXPECT(stego_png_filter(rgba, n * 4, w, h, f, filtered, lines) == STEGO_OK);
+    EXPECT(stego_png_unfilter(filtered, lines, w, h, 4, out, n * 4) == STEGO_OK);
+    EXPECT(memcmp(rgba, out, n * 4) == 0);
+  }
+
+  /* RGB rows are widened to RGBA in place; random rows with every filter type exercise that. */
+  for (uint64_t i = 0; i < rgb_lines; i++)
+    rgb[i] = next_byte();
+  for (uint64_t y = 0; y < h; y++)
+    rgb[y * ((uint64_t)w * 3 + 1)] = (uint8_t)(y % 5);
+  EXPECT(stego_png_unfilter(rgb, rgb_lines, w, h, 3, out, n * 4) == STEGO_OK);
+  EXPECT(out[3] == 255 && out[n * 4 - 1] == 255);
+
+  EXPECT(stego_png_filter(rgba, n * 4 - 1, w, h, 0, filtered, lines) == STEGO_E_LENGTH);
+  EXPECT(stego_png_filter(rgba, n * 4, w, h, 0, filtered, lines - 1) == STEGO_E_LENGTH);
+  EXPECT(stego_png_unfilter(filtered, lines + 1, w, h, 4, out, n * 4) == STEGO_E_LENGTH);
+  EXPECT(stego_png_unfilter(filtered, lines, w, h, 4, out, n * 4 - 1) == STEGO_E_LENGTH);
+  EXPECT(stego_png_unfilter(rgb, rgb_lines, w, h, 4, out, n * 4) == STEGO_E_LENGTH);
+
+  /* A bad filter byte in the last row is caught before any pixel is written. */
+  filtered[lines - (uint64_t)w * 4 - 1] = 5;
+  memset(out, 0xab, n * 4);
+  EXPECT(stego_png_unfilter(filtered, lines, w, h, 4, out, n * 4) == STEGO_E_ARGUMENT);
+  EXPECT(out[0] == 0xab);
+
+  free(rgba);
+  free(out);
+  free(filtered);
+  free(rgb);
+}
+
+static void png_invalid(void) {
+  uint8_t rgba[4] = {0}, lines[5] = {0};
+
+  EXPECT(stego_png_filter(NULL, 4, 1, 1, 0, lines, 5) == STEGO_E_NULL);
+  EXPECT(stego_png_filter(rgba, 4, 1, 1, 0, NULL, 5) == STEGO_E_NULL);
+  EXPECT(stego_png_unfilter(NULL, 5, 1, 1, 4, rgba, 4) == STEGO_E_NULL);
+  EXPECT(stego_png_unfilter(lines, 5, 1, 1, 4, NULL, 4) == STEGO_E_NULL);
+
+  EXPECT(stego_png_filter(rgba, 4, 1, 1, STEGO_PNG_FILTER_ADAPTIVE + 1, lines, 5) ==
+         STEGO_E_ARGUMENT);
+  for (uint32_t channels = 0; channels <= 8; channels++)
+    if (channels != 3 && channels != 4)
+      EXPECT(stego_png_unfilter(lines, 5, 1, 1, channels, rgba, 4) == STEGO_E_ARGUMENT);
+
+  static const uint32_t bad[][2] = {{0, 1}, {1, 0}, {STEGO_MAX_SIDE + 1, 1}, {65536, 65536}};
+  for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+    uint32_t w = bad[i][0], h = bad[i][1];
+    EXPECT(stego_png_filter(rgba, 4, w, h, 0, lines, 5) == STEGO_E_DIMENSIONS);
+    EXPECT(stego_png_unfilter(lines, 5, w, h, 4, rgba, 4) == STEGO_E_DIMENSIONS);
+  }
+}
+
 static void lsb_case(uint32_t w, uint32_t h, uint32_t k) {
   uint64_t n = (uint64_t)w * h, capacity = n * 3 * k;
   uint8_t *rgba = alloc(n * 4), *out = alloc(n * 4), *bits = alloc(capacity),
@@ -242,6 +303,9 @@ int main(void) {
   for (size_t i = 0; i < sizeof shapes / sizeof shapes[0]; i++)
     color_case(shapes[i][0], shapes[i][1]);
   color_invalid();
+  for (size_t i = 0; i < sizeof shapes / sizeof shapes[0]; i++)
+    png_case(shapes[i][0], shapes[i][1]);
+  png_invalid();
 
   for (size_t i = 0; i < sizeof shapes / sizeof shapes[0]; i++)
     lsb_case(shapes[i][0], shapes[i][1], 1);

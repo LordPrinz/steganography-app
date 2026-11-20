@@ -48,6 +48,14 @@ const symbols = {
     ],
     returns: "i32",
   },
+  stego_png_unfilter: {
+    args: ["buffer", "buffer_length", "u32", "u32", "u32", "buffer", "buffer_length"],
+    returns: "i32",
+  },
+  stego_png_filter: {
+    args: ["buffer", "buffer_length", "u32", "u32", "u32", "buffer", "buffer_length"],
+    returns: "i32",
+  },
   stego_lsb_embed: {
     args: [
       "buffer",
