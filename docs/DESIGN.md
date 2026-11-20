@@ -121,13 +121,13 @@ A library is added only when Bun has no equivalent (zod for validation, Next.js 
 
 ## Metrics
 
-| Metric         | Meaning                                                                                             |
-| -------------- | --------------------------------------------------------------------------------------------------- |
-| Decode success | Frame decoded and CRC matches                                                                       |
-| BER            | Share of payload bits (UTF-8 message, no header or CRC) read wrong; defined even when the CRC fails |
-| PSNR / SSIM    | Visual quality, computed on luminance                                                               |
-| Capacity       | UTF-8 message bytes that fit, after the error-correcting code (if any) and frame overhead           |
-| Time           | Encode / decode duration                                                                            |
+| Metric         | Meaning                                                                                                                                 |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Decode success | Frame decoded and CRC matches                                                                                                           |
+| BER            | Share of payload bits (UTF-8 message, no header or CRC) read wrong, after decoding when a code is used; defined even when the CRC fails |
+| PSNR / SSIM    | Visual quality, computed on luminance                                                                                                   |
+| Capacity       | UTF-8 message bytes that fit, after the error-correcting code (if any) and frame overhead                                               |
+| Time           | Encode / decode duration                                                                                                                |
 
 ## Data model
 

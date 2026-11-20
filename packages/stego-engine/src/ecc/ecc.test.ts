@@ -76,6 +76,11 @@ describe.each(codeCases)("error-correcting code: $name", ({ code, block, data, c
     expect(code.decode(encoded, count)).toEqual(bits);
   });
 
+  test("decode rejects a code shorter than codeBits(dataBits)", () => {
+    const encoded = code.encode(randomBits(8, 3));
+    expect(() => code.decode(encoded.subarray(0, encoded.length - 1), 8)).toThrow(RangeError);
+  });
+
   test("codeBits and dataBits agree on whole codewords", () => {
     for (let codeBits = 0; codeBits < 50; codeBits++) {
       const fits = code.dataBits(codeBits);

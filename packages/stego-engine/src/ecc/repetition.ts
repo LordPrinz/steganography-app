@@ -22,6 +22,9 @@ export function repetition({ factor }: RepetitionParams): ErrorCorrectingCode {
       return code;
     },
     decode: (code, dataBits) => {
+      if (code.length < dataBits * factor) {
+        throw new RangeError(`${dataBits} data bits need ${dataBits * factor} coded bits`);
+      }
       const bits = new Uint8Array(dataBits);
       for (let i = 0; i < dataBits; i++) {
         let ones = 0;
