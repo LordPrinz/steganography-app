@@ -21,7 +21,7 @@ enum {
   STEGO_E_NULL = -1,
   /* Width or height is zero or above STEGO_MAX_SIDE, or there are more than STEGO_MAX_PIXELS. */
   STEGO_E_DIMENSIONS = -2,
-  /* A buffer length does not match the image dimensions. */
+  /* A buffer length does not match the image dimensions, or exceeds what they can hold. */
   STEGO_E_LENGTH = -3,
   /* A scalar argument is out of range (e.g. an unknown mode or parameter value). */
   STEGO_E_ARGUMENT = -4,
@@ -67,5 +67,21 @@ int32_t stego_png_unfilter(const uint8_t *scanlines, uint64_t scanlines_bytes, u
  */
 int32_t stego_png_filter(const uint8_t *rgba, uint64_t rgba_bytes, uint32_t width, uint32_t height,
                          uint32_t filter, uint8_t *scanlines, uint64_t scanlines_bytes);
+
+/* Highest bits_per_channel accepted by the LSB kernels. */
+#define STEGO_LSB_MAX_BITS 8u
+
+/*
+ * Copies rgba to out and writes bits (one per byte, only the lowest bit is used) into the low
+ * bits_per_channel bits of the R, G and B channels. bit_count may be at most
+ * width * height * 3 * bits_per_channel; channels past the last bit keep their value.
+ */
+int32_t stego_lsb_embed(const uint8_t *rgba, uint64_t rgba_bytes, uint32_t width, uint32_t height,
+                        uint32_t bits_per_channel, const uint8_t *bits, uint64_t bit_count,
+                        uint8_t *out, uint64_t out_bytes);
+
+/* Reads the first bit_count bits written by stego_lsb_embed, one per byte (0 or 1). */
+int32_t stego_lsb_extract(const uint8_t *rgba, uint64_t rgba_bytes, uint32_t width, uint32_t height,
+                          uint32_t bits_per_channel, uint8_t *bits, uint64_t bit_count);
 
 #endif

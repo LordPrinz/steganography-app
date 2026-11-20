@@ -172,6 +172,63 @@ static void png_invalid(void) {
   }
 }
 
+static void lsb_case(uint32_t w, uint32_t h, uint32_t k) {
+  uint64_t n = (uint64_t)w * h, capacity = n * 3 * k;
+  uint8_t *rgba = alloc(n * 4), *out = alloc(n * 4), *bits = alloc(capacity),
+          *read = alloc(capacity);
+  for (uint64_t i = 0; i < n * 4; i++)
+    rgba[i] = next_byte();
+  for (uint64_t i = 0; i < capacity; i++)
+    bits[i] = next_byte() & 1;
+
+  EXPECT(stego_lsb_embed(rgba, n * 4, w, h, k, bits, capacity, out, n * 4) == STEGO_OK);
+  EXPECT(stego_lsb_extract(out, n * 4, w, h, k, read, capacity) == STEGO_OK);
+  EXPECT(memcmp(bits, read, capacity) == 0);
+  for (uint64_t i = 3; i < n * 4; i += 4)
+    EXPECT(out[i] == rgba[i]);
+
+  /* A partial embed and an empty one; NULL bits are fine when there are none. */
+  EXPECT(stego_lsb_embed(rgba, n * 4, w, h, k, bits, 1, out, n * 4) == STEGO_OK);
+  EXPECT(stego_lsb_embed(rgba, n * 4, w, h, k, NULL, 0, out, n * 4) == STEGO_OK);
+  EXPECT(memcmp(rgba, out, n * 4) == 0);
+  EXPECT(stego_lsb_extract(out, n * 4, w, h, k, NULL, 0) == STEGO_OK);
+
+  /* One bit past the capacity and image buffers one byte off are rejected before any access. */
+  EXPECT(stego_lsb_embed(rgba, n * 4, w, h, k, bits, capacity + 1, out, n * 4) == STEGO_E_LENGTH);
+  EXPECT(stego_lsb_extract(out, n * 4, w, h, k, read, capacity + 1) == STEGO_E_LENGTH);
+  EXPECT(stego_lsb_embed(rgba, n * 4 - 1, w, h, k, bits, 1, out, n * 4) == STEGO_E_LENGTH);
+  EXPECT(stego_lsb_embed(rgba, n * 4, w, h, k, bits, 1, out, n * 4 + 1) == STEGO_E_LENGTH);
+  EXPECT(stego_lsb_extract(rgba, n * 4 + 1, w, h, k, read, 1) == STEGO_E_LENGTH);
+
+  free(rgba);
+  free(out);
+  free(bits);
+  free(read);
+}
+
+static void lsb_invalid(void) {
+  uint8_t rgba[4] = {0}, out[4] = {0}, bits[3] = {0};
+
+  EXPECT(stego_lsb_embed(NULL, 4, 1, 1, 1, bits, 3, out, 4) == STEGO_E_NULL);
+  EXPECT(stego_lsb_embed(rgba, 4, 1, 1, 1, NULL, 3, out, 4) == STEGO_E_NULL);
+  EXPECT(stego_lsb_embed(rgba, 4, 1, 1, 1, bits, 3, NULL, 4) == STEGO_E_NULL);
+  EXPECT(stego_lsb_extract(NULL, 4, 1, 1, 1, bits, 3) == STEGO_E_NULL);
+  EXPECT(stego_lsb_extract(rgba, 4, 1, 1, 1, NULL, 3) == STEGO_E_NULL);
+
+  static const uint32_t bad_k[] = {0, STEGO_LSB_MAX_BITS + 1, UINT32_MAX};
+  for (size_t i = 0; i < sizeof bad_k / sizeof bad_k[0]; i++) {
+    EXPECT(stego_lsb_embed(rgba, 4, 1, 1, bad_k[i], bits, 3, out, 4) == STEGO_E_ARGUMENT);
+    EXPECT(stego_lsb_extract(rgba, 4, 1, 1, bad_k[i], bits, 3) == STEGO_E_ARGUMENT);
+  }
+
+  static const uint32_t bad[][2] = {{0, 1}, {1, 0}, {STEGO_MAX_SIDE + 1, 1}, {65536, 65536}};
+  for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+    EXPECT(stego_lsb_embed(rgba, 4, bad[i][0], bad[i][1], 1, bits, 3, out, 4) ==
+           STEGO_E_DIMENSIONS);
+    EXPECT(stego_lsb_extract(rgba, 4, bad[i][0], bad[i][1], 1, bits, 3) == STEGO_E_DIMENSIONS);
+  }
+}
+
 int main(void) {
   EXPECT(stego_abi_version() == STEGO_ABI_VERSION);
 
@@ -184,6 +241,15 @@ int main(void) {
   for (size_t i = 0; i < sizeof shapes / sizeof shapes[0]; i++)
     png_case(shapes[i][0], shapes[i][1]);
   png_invalid();
+
+  for (size_t i = 0; i < sizeof shapes / sizeof shapes[0]; i++)
+    lsb_case(shapes[i][0], shapes[i][1], 1);
+  /* Every bit depth on small shapes; the largest images already ran with one bit. */
+  for (uint32_t k = 2; k <= STEGO_LSB_MAX_BITS; k++) {
+    lsb_case(3, 5, k);
+    lsb_case(37, 23, k);
+  }
+  lsb_invalid();
 
   if (failures) {
     fprintf(stderr, "sanitize: %d check(s) failed\n", failures);
