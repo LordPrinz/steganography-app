@@ -1,3 +1,4 @@
+import type { ObjectStore } from "@stego/storage";
 import { API_PREFIX, errorResponse, HttpError, mount } from "./lib/http.ts";
 import type { KeyValueStore } from "./lib/kv/store.ts";
 import { healthRoutes } from "./modules/health/routes.ts";
@@ -5,13 +6,14 @@ import { healthRoutes } from "./modules/health/routes.ts";
 export interface ServerDeps {
   port: number;
   kv: KeyValueStore;
+  storage: Pick<ObjectStore, "ping">;
 }
 
-export function createServer({ port, kv }: ServerDeps) {
+export function createServer({ port, kv, storage }: ServerDeps) {
   return Bun.serve({
     port,
     routes: {
-      ...mount(API_PREFIX, healthRoutes({ kv })),
+      ...mount(API_PREFIX, healthRoutes({ kv, storage })),
     },
     fetch() {
       return errorResponse(new HttpError(404, "not_found", "Route not found"));
