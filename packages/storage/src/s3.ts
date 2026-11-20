@@ -1,5 +1,5 @@
 import { S3Client } from "bun";
-import { assertPresignTtl, type ObjectStore } from "./store.ts";
+import { assertImageKey, assertPresignTtl, type ObjectStore } from "./store.ts";
 
 export interface S3Config {
   endpoint: string;
@@ -23,9 +23,11 @@ export function createS3ObjectStore(
 
   return {
     async put(key, bytes) {
+      assertImageKey(key);
       await client.write(key, bytes, { type: "image/png" });
     },
     async get(key) {
+      assertImageKey(key);
       try {
         return await client.file(key).bytes();
       } catch (error) {
@@ -34,9 +36,11 @@ export function createS3ObjectStore(
       }
     },
     async delete(key) {
+      assertImageKey(key);
       await client.delete(key);
     },
     async presignGet(key, ttlSeconds) {
+      assertImageKey(key);
       assertPresignTtl(ttlSeconds);
       return client.presign(key, { method: "GET", expiresIn: ttlSeconds });
     },

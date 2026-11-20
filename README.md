@@ -32,6 +32,7 @@ packages/
   native/         pixel kernels in C, loaded through bun:ffi
   contracts/      Zod schemas shared by api and web
   db/             SQL migrations, migration runner, row types (Bun.SQL)
+  storage/        ObjectStore port, S3 adapter (Bun.S3Client) and in-memory fake
 infra/            docker-compose for Postgres, Redis and RustFS (S3)
 scripts/          git hooks and GitHub automation (Bun scripts)
 docs/             design docs and ADRs

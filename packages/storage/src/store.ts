@@ -15,6 +15,9 @@ export interface ObjectStore {
   ping(): Promise<boolean>;
 }
 
+/** Presigned URLs stay short-lived (DESIGN.md); SigV4 itself allows up to seven days. */
+export const MAX_PRESIGN_TTL_SECONDS = 3600;
+
 const USER_ID = /^[A-Za-z0-9_-]+$/;
 
 /** A fresh key `users/{userId}/{uuid}.png`. The user id must be a single path-safe segment. */
@@ -23,8 +26,18 @@ export function newImageKey(userId: string): string {
   return `users/${userId}/${crypto.randomUUID()}.png`;
 }
 
+const IMAGE_KEY =
+  /^users\/[A-Za-z0-9_-]+\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.png$/;
+
+/** Adapters accept only keys shaped like `newImageKey` output, so a caller cannot reach other prefixes. */
+export function assertImageKey(key: string): void {
+  if (!IMAGE_KEY.test(key)) throw new RangeError(`Not an image key: ${key}`);
+}
+
 export function assertPresignTtl(ttlSeconds: number): void {
-  if (!Number.isInteger(ttlSeconds) || ttlSeconds <= 0) {
-    throw new RangeError(`TTL must be a positive integer of seconds, got ${ttlSeconds}`);
+  if (!Number.isInteger(ttlSeconds) || ttlSeconds <= 0 || ttlSeconds > MAX_PRESIGN_TTL_SECONDS) {
+    throw new RangeError(
+      `TTL must be an integer between 1 and ${MAX_PRESIGN_TTL_SECONDS} seconds, got ${ttlSeconds}`,
+    );
   }
 }

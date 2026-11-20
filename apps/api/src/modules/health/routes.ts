@@ -26,11 +26,12 @@ export function healthRoutes({ kv, storage }: HealthDeps) {
     "/health/ready": {
       GET: async () => {
         const [redisUp, storageUp] = await Promise.all([kv.ping(), storage.ping()]);
-        const redis = redisUp ? "up" : "down";
-        const bucket = storageUp ? "up" : "down";
         const ready = redisUp && storageUp;
         return json<ReadinessResponse>(
-          { status: ready ? "ready" : "unavailable", checks: { redis, storage: bucket } },
+          {
+            status: ready ? "ready" : "unavailable",
+            checks: { redis: redisUp ? "up" : "down", storage: storageUp ? "up" : "down" },
+          },
           { status: ready ? 200 : 503 },
         );
       },
