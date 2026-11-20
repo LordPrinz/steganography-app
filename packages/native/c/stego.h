@@ -23,6 +23,8 @@ enum {
   STEGO_E_DIMENSIONS = -2,
   /* A buffer length does not match the image dimensions. */
   STEGO_E_LENGTH = -3,
+  /* A scalar argument is out of range (e.g. an unknown mode or parameter value). */
+  STEGO_E_ARGUMENT = -4,
 };
 
 /* Longest accepted side; leaves room for non-square images within the pixel limit. */
@@ -46,5 +48,24 @@ int32_t stego_ycbcr_to_rgba(const float *y, uint64_t y_bytes, const float *cb, u
                             const float *cr, uint64_t cr_bytes, const uint8_t *alpha,
                             uint64_t alpha_bytes, uint32_t width, uint32_t height, uint8_t *rgba,
                             uint64_t rgba_bytes);
+
+/* Filter type that picks the cheapest of the five filters for each row. */
+#define STEGO_PNG_FILTER_ADAPTIVE 5u
+
+/*
+ * Reverses PNG filtering of 8-bit RGB (channels 3) or RGBA (channels 4) scanlines: height rows of
+ * one filter-type byte followed by width * channels bytes. Writes RGBA; RGB gets alpha 255.
+ * Returns STEGO_E_ARGUMENT for another channel count or a filter type above 4.
+ */
+int32_t stego_png_unfilter(const uint8_t *scanlines, uint64_t scanlines_bytes, uint32_t width,
+                           uint32_t height, uint32_t channels, uint8_t *rgba, uint64_t rgba_bytes);
+
+/*
+ * Filters RGBA pixels into PNG scanlines (height * (1 + width * 4) bytes). filter 0..4 applies that
+ * filter to every row; STEGO_PNG_FILTER_ADAPTIVE chooses per row by the minimum sum of absolute
+ * differences.
+ */
+int32_t stego_png_filter(const uint8_t *rgba, uint64_t rgba_bytes, uint32_t width, uint32_t height,
+                         uint32_t filter, uint8_t *scanlines, uint64_t scanlines_bytes);
 
 #endif

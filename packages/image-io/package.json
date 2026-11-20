@@ -6,6 +6,9 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "dependencies": {
+    "@stego/native": "workspace:*"
+  },
   "scripts": {
     "typecheck": "tsc -p ."
   }

@@ -3,6 +3,7 @@ const STATUS = {
   [-1]: "null-pointer",
   [-2]: "invalid-dimensions",
   [-3]: "length-mismatch",
+  [-4]: "invalid-argument",
 } as const satisfies Record<number, string>;
 
 export type NativeStatus = (typeof STATUS)[keyof typeof STATUS] | "unknown";

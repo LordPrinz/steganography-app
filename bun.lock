@@ -75,6 +75,9 @@
     "packages/image-io": {
       "name": "@stego/image-io",
       "version": "0.0.0",
+      "dependencies": {
+        "@stego/native": "workspace:*",
+      },
     },
     "packages/native": {
       "name": "@stego/native",
