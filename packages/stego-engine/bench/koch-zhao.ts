@@ -77,7 +77,7 @@ for (const pair of PAIRS) {
         bers[i]?.push(ber(bits, method.extract(attacked, bits.length)));
       }
     }
-    const cells = bers.map((values) => (mean(values) * 100).toFixed(2) + "%");
+    const cells = bers.map((values) => `${(mean(values) * 100).toFixed(2)}%`);
     console.info(
       `| ${label(pair)} | ${strength} | ${mean(psnrs).toFixed(2)} | ${cells.join(" | ")} |`,
     );
