@@ -93,7 +93,22 @@ reports 503 when Redis is down. See ADR 3.
 
 `Bun.Image` covers decoding (with `maxPixels` against decompression bombs and EXIF auto-orient), JPEG at
 a given quality and resizing with selectable kernels. It does **not** expose raw pixels or blur, so
-`image-io` adds a PNG ↔ RGBA codec (`decodeRgba`/`encodePng`); a Gaussian blur is still backlog (ST-9).
+`image-io` adds a PNG ↔ RGBA codec (`decodeRgba`/`encodePng`) and a separable Gaussian blur in
+`@stego/native` (radius ⌈3σ⌉, edge pixels repeated, alpha untouched).
+
+### Attacks and scenarios
+
+An attack is a JSON object such as `{ "type": "jpeg", "quality": 75 }`, `{ "type": "resize", "scale": 0.5 }`
+or `{ "type": "blur", "sigma": 1.5 }`; a scenario is an ordered list of up to 8 of them. Both are zod
+schemas in `@stego/contracts` (`Attack`, `Scenario`), so the same JSON goes into the history and back.
+Parameters are relative, so one scenario fits any image. `image-io` maps each attack type to its
+implementation in one registry (`applyAttack`), and `applyScenario` runs the list in order on RGBA
+pixels. A resize changes the size for the attacks after it, as when a downscaled image is then
+recompressed; `applyScenario` scales the final result back to the original size (non-blind decoding,
+above). Both resizes use the Lanczos-3 filter. A JPEG step drops transparency (alpha becomes 255).
+The attacks reject parameters they cannot run, but only the schema enforces the lab's ranges, so the
+API must parse every scenario with `Scenario` before it reaches the worker. Every attack passes a shared
+contract suite (`image-io/test/attack-contract.test.ts`).
 
 ### Pixel kernels in C
 

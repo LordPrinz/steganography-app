@@ -1,2 +1,3 @@
+export * from "./attacks.ts";
 export * from "./pipeline.ts";
 export * from "./png.ts";

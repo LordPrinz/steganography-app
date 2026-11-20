@@ -229,6 +229,72 @@ static void lsb_invalid(void) {
   }
 }
 
+static void blur_case(uint32_t w, uint32_t h, uint64_t taps) {
+  uint64_t n = (uint64_t)w * h, sb = (uint64_t)w * 3 * sizeof(double), kb = taps * sizeof(double);
+  uint8_t *rgba = alloc(n * 4), *out = alloc(n * 4);
+  double *kernel = alloc(kb), *scratch = alloc(sb);
+  for (uint64_t i = 0; i < n * 4; i++)
+    rgba[i] = next_byte();
+  for (uint64_t i = 0; i < taps; i++)
+    kernel[i] = 1.0 / (double)taps;
+
+  EXPECT(stego_blur_separable(rgba, n * 4, w, h, kernel, kb, scratch, sb, out, n * 4) == STEGO_OK);
+  for (uint64_t i = 3; i < n * 4; i += 4)
+    EXPECT(out[i] == rgba[i]);
+
+  /* A one-tap identity kernel returns the input. */
+  kernel[0] = 1.0;
+  EXPECT(stego_blur_separable(rgba, n * 4, w, h, kernel, sizeof(double), scratch, sb, out, n * 4) ==
+         STEGO_OK);
+  EXPECT(memcmp(rgba, out, n * 4) == 0);
+
+  /* Weights that overflow or are NaN still clamp before the integer conversion. */
+  kernel[0] = INFINITY;
+  EXPECT(stego_blur_separable(rgba, n * 4, w, h, kernel, sizeof(double), scratch, sb, out, n * 4) ==
+         STEGO_OK);
+  kernel[0] = NAN;
+  EXPECT(stego_blur_separable(rgba, n * 4, w, h, kernel, sizeof(double), scratch, sb, out, n * 4) ==
+         STEGO_OK);
+
+  /* Buffers one byte off are rejected before any access. */
+  EXPECT(stego_blur_separable(rgba, n * 4 - 1, w, h, kernel, kb, scratch, sb, out, n * 4) ==
+         STEGO_E_LENGTH);
+  EXPECT(stego_blur_separable(rgba, n * 4, w, h, kernel, kb, scratch, sb - 1, out, n * 4) ==
+         STEGO_E_LENGTH);
+  EXPECT(stego_blur_separable(rgba, n * 4, w, h, kernel, kb, scratch, sb, out, n * 4 + 1) ==
+         STEGO_E_LENGTH);
+  EXPECT(stego_blur_separable(rgba, n * 4, w, h, kernel, kb - 1, scratch, sb, out, n * 4) ==
+         STEGO_E_LENGTH);
+
+  free(rgba);
+  free(out);
+  free(kernel);
+  free(scratch);
+}
+
+static void blur_invalid(void) {
+  uint8_t rgba[4] = {0}, out[4] = {0};
+  double kernel[3] = {0.25, 0.5, 0.25}, scratch[3] = {0};
+  uint64_t kb = sizeof kernel, sb = sizeof scratch;
+
+  EXPECT(stego_blur_separable(NULL, 4, 1, 1, kernel, kb, scratch, sb, out, 4) == STEGO_E_NULL);
+  EXPECT(stego_blur_separable(rgba, 4, 1, 1, NULL, kb, scratch, sb, out, 4) == STEGO_E_NULL);
+  EXPECT(stego_blur_separable(rgba, 4, 1, 1, kernel, kb, NULL, sb, out, 4) == STEGO_E_NULL);
+  EXPECT(stego_blur_separable(rgba, 4, 1, 1, kernel, kb, scratch, sb, NULL, 4) == STEGO_E_NULL);
+
+  /* Even tap counts (including none) and kernels longer than the limit. */
+  EXPECT(stego_blur_separable(rgba, 4, 1, 1, kernel, 0, scratch, sb, out, 4) == STEGO_E_ARGUMENT);
+  EXPECT(stego_blur_separable(rgba, 4, 1, 1, kernel, 2 * sizeof(double), scratch, sb, out, 4) ==
+         STEGO_E_ARGUMENT);
+  EXPECT(stego_blur_separable(rgba, 4, 1, 1, kernel, (STEGO_BLUR_MAX_TAPS + 2) * sizeof(double),
+                              scratch, sb, out, 4) == STEGO_E_ARGUMENT);
+
+  static const uint32_t bad[][2] = {{0, 1}, {1, 0}, {STEGO_MAX_SIDE + 1, 1}, {65536, 65536}};
+  for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++)
+    EXPECT(stego_blur_separable(rgba, 4, bad[i][0], bad[i][1], kernel, kb, scratch, sb, out, 4) ==
+           STEGO_E_DIMENSIONS);
+}
+
 int main(void) {
   EXPECT(stego_abi_version() == STEGO_ABI_VERSION);
 
@@ -250,6 +316,14 @@ int main(void) {
     lsb_case(37, 23, k);
   }
   lsb_invalid();
+
+  for (size_t i = 0; i < sizeof shapes / sizeof shapes[0]; i++)
+    blur_case(shapes[i][0], shapes[i][1], 3);
+  /* Kernels much wider than the image, up to the longest allowed. */
+  blur_case(1, 1, STEGO_BLUR_MAX_TAPS);
+  blur_case(3, 5, 61);
+  blur_case(37, 23, STEGO_BLUR_MAX_TAPS);
+  blur_invalid();
 
   if (failures) {
     fprintf(stderr, "sanitize: %d check(s) failed\n", failures);

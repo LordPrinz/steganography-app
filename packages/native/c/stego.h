@@ -84,4 +84,17 @@ int32_t stego_lsb_embed(const uint8_t *rgba, uint64_t rgba_bytes, uint32_t width
 int32_t stego_lsb_extract(const uint8_t *rgba, uint64_t rgba_bytes, uint32_t width, uint32_t height,
                           uint32_t bits_per_channel, uint8_t *bits, uint64_t bit_count);
 
+/* Longest kernel accepted by stego_blur_separable. */
+#define STEGO_BLUR_MAX_TAPS 255u
+
+/*
+ * Convolves the R, G and B channels with kernel (an odd number of taps, at most
+ * STEGO_BLUR_MAX_TAPS) along both axes, repeating edge pixels, then rounds and clamps to 0..255.
+ * Alpha is copied. scratch holds width * 3 doubles; out must not overlap rgba.
+ */
+int32_t stego_blur_separable(const uint8_t *rgba, uint64_t rgba_bytes, uint32_t width,
+                             uint32_t height, const double *kernel, uint64_t kernel_bytes,
+                             double *scratch, uint64_t scratch_bytes, uint8_t *out,
+                             uint64_t out_bytes);
+
 #endif
