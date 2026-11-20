@@ -53,8 +53,8 @@ every call, so a caller had to carry the method and its parameters around as a p
 - `index.ts` exports the codec, `ConfiguredMethod`, `MethodId`, `RgbaImage` and the result and error
   types. `frame` and `bits` are internal.
 - Two shared suites run over every configured method in `src/testing/methods.ts`: the method contract
-  (internal seam) and the codec suite. Until LSB lands (#4) the list holds a test-only TypeScript
-  fake method.
+  (internal seam) and the codec suite. The list holds every configured method; LSB runs at 1, 2, 3
+  and 8 bits per channel.
 
 ## Consequences
 

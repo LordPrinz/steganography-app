@@ -83,6 +83,9 @@
     "packages/stego-engine": {
       "name": "@stego/engine",
       "version": "0.0.0",
+      "dependencies": {
+        "@stego/native": "workspace:*",
+      },
     },
     "packages/storage": {
       "name": "@stego/storage",

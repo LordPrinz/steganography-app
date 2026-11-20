@@ -9,7 +9,6 @@ import {
   reveal,
 } from "./codec.ts";
 import { encodeFrame, FRAME_HEADER_BYTES, FRAME_OVERHEAD_BYTES } from "./payload/frame.ts";
-import { withId } from "./testing/fake-method.ts";
 import { noiseImage } from "./testing/images.ts";
 import { methodCases } from "./testing/methods.ts";
 import { type ConfiguredMethod, MethodId, type RgbaImage } from "./types.ts";
@@ -21,6 +20,16 @@ function flipFrameBit(cover: RgbaImage, stego: RgbaImage, method: ConfiguredMeth
   const bits = method.extract(stego, method.capacityBits(stego.width, stego.height));
   bits[bit] = (bits[bit] as number) ^ 1;
   return method.embed(cover, bits);
+}
+
+/** Same embedding as `method`, but writes frames under another method id. */
+function withId(method: ConfiguredMethod, id: MethodId): ConfiguredMethod {
+  return {
+    id,
+    capacityBits: (width, height) => method.capacityBits(width, height),
+    embed: (image, bits) => method.embed(image, bits),
+    extract: (image, bitCount) => method.extract(image, bitCount),
+  };
 }
 
 function otherId(method: ConfiguredMethod): MethodId {
