@@ -3,12 +3,13 @@ import { ApiError, HealthResponse, ReadinessResponse } from "@stego/contracts";
 import { createMemoryObjectStore } from "@stego/storage";
 import { createServer } from "./app.ts";
 import { createMemoryStore } from "./lib/kv/memory.ts";
+import { testServerDeps } from "./testing.ts";
 
 const kv = createMemoryStore();
 const storage = createMemoryObjectStore();
-const server = createServer({ port: 0, kv, storage });
-const redisDown = createServer({ port: 0, kv: { ...kv, ping: async () => false }, storage });
-const storageDown = createServer({ port: 0, kv, storage: { ping: async () => false } });
+const server = createServer(testServerDeps({ kv, storage }));
+const redisDown = createServer(testServerDeps({ kv: { ...kv, ping: async () => false }, storage }));
+const storageDown = createServer(testServerDeps({ kv, storage: { ping: async () => false } }));
 afterAll(() => {
   server.stop(true);
   redisDown.stop(true);

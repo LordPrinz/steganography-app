@@ -1,3 +1,4 @@
+import { createDb, createRefreshTokenRepository, createUserRepository } from "@stego/db";
 import { createS3ObjectStore } from "@stego/storage";
 import { RedisClient } from "bun";
 import { createServer } from "./app.ts";
@@ -14,6 +15,16 @@ const storage = createS3ObjectStore({
   accessKeyId: env.S3_ACCESS_KEY_ID,
   secretAccessKey: env.S3_SECRET_ACCESS_KEY,
 });
-const server = createServer({ port: env.API_PORT, kv: createRedisStore(redis), storage });
+const db = createDb(env.DATABASE_URL);
+const server = createServer({
+  port: env.API_PORT,
+  kv: createRedisStore(redis),
+  storage,
+  users: createUserRepository(db),
+  refreshTokens: createRefreshTokenRepository(db),
+  jwtSecret: env.JWT_SECRET,
+  appOrigin: env.APP_ORIGIN,
+  trustProxy: env.TRUST_PROXY,
+});
 
 console.info(`API listening on ${server.url}`);

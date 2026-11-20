@@ -106,6 +106,18 @@ each kernel with a naive TS oracle, and an ASan/UBSan harness checks memory safe
 - Passwords: `Bun.password` (argon2id).
 - Auth: short-lived JWT access token + refresh token (hashed in DB, revocable), both in `httpOnly`,
   `SameSite=Lax` cookies. Same-origin API via Next rewrites, so no CORS.
+  - Access token: HS256 JWT signed with `JWT_SECRET` through Bun's HMAC (no JWT library), 15 minutes,
+    cookie path `/api/v1`. Logout puts its `jti` on a Redis denylist until it expires.
+  - Refresh token: 256 random bits, 7 days, cookie path `/api/v1/auth`, stored as SHA-256. Every refresh
+    rotates it. Presenting a rotated token again means it leaked, so all of the user's sessions are revoked.
+  - CSRF: every state-changing request must carry `Origin: APP_ORIGIN`, otherwise 403. The check wraps
+    all routes in `createServer`, so new modules get it without opting in.
+  - Rate limits (fixed window, Redis): login 20 / 15 min per IP and 10 failures / 15 min per e-mail
+    and IP (only failures count, and never per e-mail alone, so nobody can lock another user out), register
+    5 / hour per IP, refresh 60 / 15 min per IP; 429 with `Retry-After`. Behind a proxy we control
+    (`TRUST_PROXY=true`) the client IP is the last `X-Forwarded-For` entry.
+  - No account enumeration: register answers 202 whether or not the e-mail is taken, and login gives the
+    same 401 for an unknown e-mail and a wrong password, with the same argon2 work in both cases.
 - Storage: private bucket, keys `users/{userId}/{uuid}.png`, short-lived presigned URLs issued only
   after an ownership check. Every query by id is scoped to the current user.
 - Uploads: format sniffed from bytes, pixel limit, size limit, metadata stripped.

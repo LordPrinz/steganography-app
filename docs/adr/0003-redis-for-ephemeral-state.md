@@ -30,3 +30,8 @@ keeps. Bun 1.4 ships a Redis client (`RedisClient` / `Bun.redis`), so Redis adds
   port bound to `127.0.0.1`. Its password comes from `REDIS_PASSWORD` in `.env` and is never committed.
 - Rate-limit keys hold a SHA-256 of the id, so e-mails and IPs are not stored in Redis.
 - If Redis is lost, only counters and cache entries go with it, so it needs no backup.
+- Auth (#15) keeps two things here: rate-limit counters and the logout denylist of access token `jti`s,
+  each with a TTL equal to the token's remaining lifetime. Both fail open while Redis is down. Rate limits
+  are skipped rather than blocking every login, since argon2 still makes each guess expensive. The
+  denylist is skipped too, so a logged-out access token stays valid until it expires (15 minutes at most).
+  The refresh token is revoked in Postgres either way, so the session cannot be extended.

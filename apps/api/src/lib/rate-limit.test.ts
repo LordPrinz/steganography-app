@@ -31,6 +31,20 @@ describe("rate limiter", () => {
     });
   });
 
+  test("peek reads the count without adding to it", async () => {
+    const limiter = createRateLimiter(createMemoryStore(), {
+      name: "login",
+      limit: 2,
+      windowMs: 60_000,
+    });
+    expect(await limiter.peek("a")).toEqual({ allowed: true, remaining: 2, retryAfterMs: 0 });
+    await limiter.hit("a");
+    expect(await limiter.peek("a")).toEqual({ allowed: true, remaining: 1, retryAfterMs: 0 });
+    await limiter.hit("a");
+    expect(await limiter.peek("a")).toEqual({ allowed: false, remaining: 0, retryAfterMs: 60_000 });
+    expect(await limiter.peek("a")).toEqual({ allowed: false, remaining: 0, retryAfterMs: 60_000 });
+  });
+
   test("the window resets", async () => {
     const clock = fakeClock();
     const limiter = createRateLimiter(createMemoryStore(clock.now), {

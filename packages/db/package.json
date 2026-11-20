@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./memory": "./src/auth.memory.ts",
     "./migrator": "./src/migrator.ts",
     "./testing": "./src/testing.ts"
   },

@@ -4,6 +4,11 @@ const Env = z.object({
   API_PORT: z.coerce.number().int().positive().default(4000),
   DATABASE_URL: z.url(),
   JWT_SECRET: z.string().min(32),
+  APP_ORIGIN: z
+    .url({ protocol: /^https?$/ })
+    .default("http://localhost:3000")
+    .transform((url) => new URL(url).origin),
+  TRUST_PROXY: z.stringbool().default(false),
   S3_ENDPOINT: z.url(),
   S3_REGION: z.string().default("auto"),
   S3_BUCKET: z.string().min(1),
