@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { deflateSync } from "node:zlib";
 import { PngFilter, pngFilter } from "@stego/native";
 import { toJpeg, toPng } from "../src/pipeline.ts";
-import { decodePng, decodeRgba, encodePng, type RgbaImage } from "../src/png.ts";
+import { decodePng, decodeRgba, encodePng, InvalidImageError, type RgbaImage } from "../src/png.ts";
 
 const fixture = (name: string) => Bun.file(new URL(`./fixtures/${name}`, import.meta.url)).bytes();
 
@@ -40,6 +40,28 @@ function chunk(type: string, data: Uint8Array): Uint8Array {
   out.set(data, 8);
   view.setUint32(8 + data.length, Bun.hash.crc32(out.subarray(4, 8 + data.length)));
   return out;
+}
+
+const SIGNATURE = Uint8Array.of(137, 80, 78, 71, 13, 10, 26, 10);
+const withSignature = (...chunks: Uint8Array[]) => Buffer.concat([SIGNATURE, ...chunks]);
+
+/** The IHDR, single IDAT and IEND chunks of `encodePng(image)`, CRCs included. */
+async function chunksOf(image: RgbaImage) {
+  const png = await encodePng(image);
+  return {
+    ihdr: png.subarray(8, 33),
+    idat: png.subarray(33, png.length - 12),
+    iend: png.subarray(png.length - 12),
+  };
+}
+
+async function expectInvalid(promise: Promise<unknown>, message: string): Promise<void> {
+  const error = await promise.then(
+    () => undefined,
+    (caught: unknown) => caught,
+  );
+  expect(error).toBeInstanceOf(InvalidImageError);
+  expect((error as Error).message).toContain(message);
 }
 
 /** Replaces bytes of a PNG chunk and fixes its CRC, so the decoder reaches the field under test. */
@@ -81,7 +103,7 @@ describe("decodeRgba", () => {
   });
 
   test("rejects bytes that are not an image", async () => {
-    await expect(decodeRgba(new TextEncoder().encode("not an image"))).rejects.toThrow();
+    await expectInvalid(decodeRgba(new TextEncoder().encode("not an image")), "cannot decode");
   });
 });
 
@@ -122,15 +144,9 @@ describe("decodePng", () => {
     "decodes scanlines that all use the %s filter",
     async (_, filter) => {
       const image = randomImage(11, 6);
-      const png = await encodePng(image);
-      const ihdrEnd = 8 + 12 + 13;
+      const { ihdr, iend } = await chunksOf(image);
       const idat = chunk("IDAT", deflateSync(pngFilter(image, filter)));
-      const rebuilt = Buffer.concat([
-        png.subarray(0, ihdrEnd),
-        idat,
-        png.subarray(png.length - 12),
-      ]);
-      expect(await decodePng(rebuilt)).toEqual(image);
+      expect(await decodePng(withSignature(ihdr, idat, iend))).toEqual(image);
     },
   );
 
@@ -145,19 +161,42 @@ describe("decodePng", () => {
   test("rejects a bad signature", async () => {
     const png = await encodePng(randomImage(2, 2));
     png[1] = 0;
-    await expect(decodePng(png)).rejects.toThrow("bad signature");
+    await expectInvalid(decodePng(png), "bad signature");
   });
 
   test("rejects a chunk with a bad CRC", async () => {
     const png = await encodePng(randomImage(2, 2));
     png[29] = (png[29] as number) ^ 1;
-    await expect(decodePng(png)).rejects.toThrow("IHDR has a bad CRC");
+    await expectInvalid(decodePng(png), "IHDR has a bad CRC");
   });
 
   test("rejects a truncated file", async () => {
     const png = await encodePng(randomImage(2, 2));
-    await expect(decodePng(png.subarray(0, png.length - 12))).rejects.toThrow("ends before IEND");
-    await expect(decodePng(png.subarray(0, 50))).rejects.toThrow("past the end");
+    await expectInvalid(decodePng(png.subarray(0, png.length - 12)), "ends before IEND");
+    await expectInvalid(decodePng(png.subarray(0, 50)), "past the end");
+  });
+
+  test("rejects a missing, late or repeated IHDR", async () => {
+    const { ihdr, idat, iend } = await chunksOf(randomImage(2, 2));
+    const message = "exactly one IHDR, as the first chunk";
+    await expectInvalid(decodePng(withSignature(idat, ihdr, iend)), message);
+    await expectInvalid(decodePng(withSignature(ihdr, ihdr, idat, iend)), message);
+    await expectInvalid(decodePng(withSignature(iend)), message);
+  });
+
+  test("rejects a PNG without image data", async () => {
+    const { ihdr, iend } = await chunksOf(randomImage(2, 2));
+    await expectInvalid(decodePng(withSignature(ihdr, iend)), "no image data");
+  });
+
+  test("rejects an unknown critical chunk and skips ancillary ones", async () => {
+    const image = randomImage(2, 2);
+    const { ihdr, idat, iend } = await chunksOf(image);
+    const ancillary = chunk("tEXt", new TextEncoder().encode("Comment\0hi"));
+    const palette = chunk("PLTE", Uint8Array.of(1, 2, 3));
+    expect(await decodePng(withSignature(ihdr, ancillary, palette, idat, iend))).toEqual(image);
+    const critical = chunk("ABCD", new Uint8Array(1));
+    await expectInvalid(decodePng(withSignature(ihdr, critical, idat, iend)), "chunk ABCD");
   });
 
   test.each([
@@ -167,16 +206,36 @@ describe("decodePng", () => {
     ["interlaced", 12, [1]],
   ] as const)("rejects an unsupported %s PNG", async (_, offset, bytes) => {
     const png = patchChunk(await encodePng(randomImage(2, 2)), "IHDR", offset, [...bytes]);
-    await expect(decodePng(png)).rejects.toThrow("unsupported PNG");
+    await expectInvalid(decodePng(png), "unsupported PNG");
   });
 
-  test("rejects dimensions above the pixel limit before inflating", async () => {
-    const png = patchChunk(await encodePng(randomImage(2, 2)), "IHDR", 0, [0, 1, 0, 0, 0, 0, 1, 1]);
-    await expect(decodePng(png)).rejects.toThrow("unsupported PNG size 65536x257");
+  test.each([
+    ["above the pixel limit", [0, 0, 0x10, 1, 0, 0, 0x10, 0], "4097x4096"],
+    ["with a side above the limit", [0, 0, 0x40, 1, 0, 0, 0, 1], "16385x1"],
+    ["of zero", [0, 0, 0, 0, 0, 0, 0, 1], "0x1"],
+  ] as const)("rejects dimensions %s before inflating", async (_, bytes, size) => {
+    const png = patchChunk(await encodePng(randomImage(2, 2)), "IHDR", 0, [...bytes]);
+    await expectInvalid(decodePng(png), `unsupported PNG size ${size}`);
   });
 
   test("rejects image data of the wrong size", async () => {
-    const png = patchChunk(await encodePng(randomImage(2, 2)), "IHDR", 4, [0, 0, 0, 3]);
-    await expect(decodePng(png)).rejects.toThrow("has 18 bytes, expected 27");
+    const small = patchChunk(await encodePng(randomImage(2, 2)), "IHDR", 4, [0, 0, 0, 3]);
+    await expectInvalid(decodePng(small), "has 18 bytes, expected 27");
+    const large = patchChunk(await encodePng(randomImage(2, 2)), "IHDR", 4, [0, 0, 0, 1]);
+    await expectInvalid(decodePng(large), "image data is corrupt");
+  });
+
+  test("rejects image data that is not zlib", async () => {
+    const { ihdr, iend } = await chunksOf(randomImage(2, 2));
+    const idat = chunk("IDAT", Uint8Array.of(1, 2, 3, 4));
+    await expectInvalid(decodePng(withSignature(ihdr, idat, iend)), "image data is corrupt");
+  });
+
+  test("rejects an unknown filter type in the image data", async () => {
+    const { ihdr, iend } = await chunksOf(randomImage(2, 2));
+    const scanlines = new Uint8Array(18);
+    scanlines[9] = 7;
+    const idat = chunk("IDAT", deflateSync(scanlines));
+    await expectInvalid(decodePng(withSignature(ihdr, idat, iend)), "unknown filter type 7");
   });
 });

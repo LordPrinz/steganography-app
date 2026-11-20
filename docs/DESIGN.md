@@ -91,7 +91,7 @@ reports 503 when Redis is down. See ADR 3.
 
 `Bun.Image` covers decoding (with `maxPixels` against decompression bombs and EXIF auto-orient), JPEG at
 a given quality and resizing with selectable kernels. It does **not** expose raw pixels or blur, so
-`image-io` adds a PNG ↔ RGBA codec and a Gaussian blur (backlog).
+`image-io` adds a PNG ↔ RGBA codec (`decodeRgba`/`encodePng`); a Gaussian blur is still backlog (ST-9).
 
 ### Pixel kernels in C
 

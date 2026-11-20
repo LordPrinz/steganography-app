@@ -1,5 +1,5 @@
 export * from "./color.ts";
-export type { RgbaPixels } from "./image.ts";
+export { assertDimensions, type RgbaPixels } from "./image.ts";
 export { NativeLibraryError } from "./library.ts";
 export * from "./lsb.ts";
 export * from "./png.ts";
