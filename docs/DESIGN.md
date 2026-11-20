@@ -38,7 +38,9 @@ web (Next.js) ──/api/v1/* rewrite──▶ api (Bun.serve) ──▶ Postgre
 Every method embeds the same frame: `magic "SG" | version | method id | length (u32) | payload | CRC32`
 (`packages/stego-engine/src/payload/frame.ts`). The CRC lets the decoder tell a real message apart from
 noise read out of a clean image; without it "decoding success" and "detection" are undefined.
-Error-correcting codes for DCT / QIM go on top of this frame (backlog).
+An error-correcting code (repetition with majority vote, or Hamming(7,4)) can wrap any configured method:
+`withErrorCorrection(method, code)` encodes the frame bits before embedding and decodes them after
+extraction, and capacity shrinks by the code rate. The codec does not change. See ADR 6.
 
 Only the stego codec (`hide`, `reveal`, `measure`, `capacity`) builds and reads frames; the frame and bit
 packing are internal to `stego-engine`. Methods receive bits and know nothing about the frame. `reveal`
@@ -91,7 +93,22 @@ reports 503 when Redis is down. See ADR 3.
 
 `Bun.Image` covers decoding (with `maxPixels` against decompression bombs and EXIF auto-orient), JPEG at
 a given quality and resizing with selectable kernels. It does **not** expose raw pixels or blur, so
-`image-io` adds a PNG ↔ RGBA codec (`decodeRgba`/`encodePng`); a Gaussian blur is still backlog (ST-9).
+`image-io` adds a PNG ↔ RGBA codec (`decodeRgba`/`encodePng`) and a separable Gaussian blur in
+`@stego/native` (radius ⌈3σ⌉, edge pixels repeated, alpha untouched).
+
+### Attacks and scenarios
+
+An attack is a JSON object such as `{ "type": "jpeg", "quality": 75 }`, `{ "type": "resize", "scale": 0.5 }`
+or `{ "type": "blur", "sigma": 1.5 }`; a scenario is an ordered list of up to 8 of them. Both are zod
+schemas in `@stego/contracts` (`Attack`, `Scenario`), so the same JSON goes into the history and back.
+Parameters are relative, so one scenario fits any image. `image-io` maps each attack type to its
+implementation in one registry (`applyAttack`), and `applyScenario` runs the list in order on RGBA
+pixels. A resize changes the size for the attacks after it, as when a downscaled image is then
+recompressed; `applyScenario` scales the final result back to the original size (non-blind decoding,
+above). Both resizes use the Lanczos-3 filter. A JPEG step drops transparency (alpha becomes 255).
+The attacks reject parameters they cannot run, but only the schema enforces the lab's ranges, so the
+API must parse every scenario with `Scenario` before it reaches the worker. Every attack passes a shared
+contract suite (`image-io/test/attack-contract.test.ts`).
 
 ### Pixel kernels in C
 
@@ -119,13 +136,13 @@ A library is added only when Bun has no equivalent (zod for validation, Next.js 
 
 ## Metrics
 
-| Metric         | Meaning                                                                                             |
-| -------------- | --------------------------------------------------------------------------------------------------- |
-| Decode success | Frame decoded and CRC matches                                                                       |
-| BER            | Share of payload bits (UTF-8 message, no header or CRC) read wrong; defined even when the CRC fails |
-| PSNR / SSIM    | Visual quality, computed on luminance                                                               |
-| Capacity       | UTF-8 message bytes that fit, after frame overhead                                                  |
-| Time           | Encode / decode duration                                                                            |
+| Metric         | Meaning                                                                                                                                 |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Decode success | Frame decoded and CRC matches                                                                                                           |
+| BER            | Share of payload bits (UTF-8 message, no header or CRC) read wrong, after decoding when a code is used; defined even when the CRC fails |
+| PSNR / SSIM    | Visual quality, computed on luminance                                                                                                   |
+| Capacity       | UTF-8 message bytes that fit, after the error-correcting code (if any) and frame overhead                                               |
+| Time           | Encode / decode duration                                                                                                                |
 
 PSNR and SSIM compare the luminance (Y, as the transform methods use it) of cover and stego image; alpha
 is ignored. PSNR is `Infinity` for identical images. SSIM uses the parameters of Wang et al. 2004 (11 × 11
