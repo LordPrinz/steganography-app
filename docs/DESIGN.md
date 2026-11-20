@@ -38,7 +38,9 @@ web (Next.js) ──/api/v1/* rewrite──▶ api (Bun.serve) ──▶ Postgre
 Every method embeds the same frame: `magic "SG" | version | method id | length (u32) | payload | CRC32`
 (`packages/stego-engine/src/payload/frame.ts`). The CRC lets the decoder tell a real message apart from
 noise read out of a clean image; without it "decoding success" and "detection" are undefined.
-Error-correcting codes for DCT / QIM go on top of this frame (backlog).
+An error-correcting code (repetition with majority vote, or Hamming(7,4)) can wrap any configured method:
+`withErrorCorrection(method, code)` encodes the frame bits before embedding and decodes them after
+extraction, and capacity shrinks by the code rate. The codec does not change. See ADR 6.
 
 Only the stego codec (`hide`, `reveal`, `measure`, `capacity`) builds and reads frames; the frame and bit
 packing are internal to `stego-engine`. Methods receive bits and know nothing about the frame. `reveal`
@@ -124,7 +126,7 @@ A library is added only when Bun has no equivalent (zod for validation, Next.js 
 | Decode success | Frame decoded and CRC matches                                                                       |
 | BER            | Share of payload bits (UTF-8 message, no header or CRC) read wrong; defined even when the CRC fails |
 | PSNR / SSIM    | Visual quality, computed on luminance                                                               |
-| Capacity       | UTF-8 message bytes that fit, after frame overhead                                                  |
+| Capacity       | UTF-8 message bytes that fit, after the error-correcting code (if any) and frame overhead           |
 | Time           | Encode / decode duration                                                                            |
 
 ## Data model
