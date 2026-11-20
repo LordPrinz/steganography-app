@@ -2,6 +2,11 @@ import { z } from "zod";
 
 const Env = z.object({
   DATABASE_URL: z.url(),
+  S3_ENDPOINT: z.url(),
+  S3_REGION: z.string().default("auto"),
+  S3_BUCKET: z.string().min(1),
+  S3_ACCESS_KEY_ID: z.string().min(1),
+  S3_SECRET_ACCESS_KEY: z.string().min(1),
   WORKER_POLL_INTERVAL_MS: z.coerce.number().int().positive().max(60_000).default(1_000),
   WORKER_JOB_TIMEOUT_MS: z.coerce
     .number()
