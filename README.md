@@ -51,16 +51,16 @@ bun run dev            # api :4000, worker, web :3000
 
 ## Scripts
 
-| Command                       | What it does                                                             |
-| ----------------------------- | ------------------------------------------------------------------------ |
-| `bun run dev`                 | api + worker + web in watch mode                                         |
-| `bun run check` / `check:fix` | Biome lint + format                                                      |
-| `bun run typecheck`           | `tsc` in every workspace                                                 |
-| `bun test`                    | all tests (DB / Redis tests need `TEST_DATABASE_URL` / `TEST_REDIS_URL`) |
-| `bun run build`               | production build of the web app                                          |
-| `bun run db:new <name>`       | new empty migration `packages/db/migrations/NNNN_<name>.sql`             |
-| `bun run db:migrate`          | apply migrations                                                         |
-| `bun run native:build`        | rebuild the C kernels (`packages/native/build/`)                         |
-| `bun run native:sanitize`     | run the C kernels under ASan + UBSan                                     |
-| `bun run native:bench`        | benchmark TS vs TinyCC vs `-O3` on a 12 MP image                         |
-| `bun run native:format`       | format the C sources (clang-format 19.1.7 through `pipx`)                |
+| Command                       | What it does                                                                                |
+| ----------------------------- | ------------------------------------------------------------------------------------------- |
+| `bun run dev`                 | api + worker + web in watch mode                                                            |
+| `bun run check` / `check:fix` | Biome lint + format                                                                         |
+| `bun run typecheck`           | `tsc` in every workspace                                                                    |
+| `bun test`                    | all tests (DB / Redis / S3 tests need `TEST_DATABASE_URL` / `TEST_REDIS_URL` / `TEST_S3_*`) |
+| `bun run build`               | production build of the web app                                                             |
+| `bun run db:new <name>`       | new empty migration `packages/db/migrations/NNNN_<name>.sql`                                |
+| `bun run db:migrate`          | apply migrations                                                                            |
+| `bun run native:build`        | rebuild the C kernels (`packages/native/build/`)                                            |
+| `bun run native:sanitize`     | run the C kernels under ASan + UBSan                                                        |
+| `bun run native:bench`        | benchmark TS vs TinyCC vs `-O3` on a 12 MP image                                            |
+| `bun run native:format`       | format the C sources (clang-format 19.1.7 through `pipx`)                                   |

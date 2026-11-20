@@ -12,6 +12,6 @@ export type DependencyStatus = z.infer<typeof DependencyStatus>;
 
 export const ReadinessResponse = z.object({
   status: z.enum(["ready", "unavailable"]),
-  checks: z.object({ redis: DependencyStatus }),
+  checks: z.object({ redis: DependencyStatus, storage: DependencyStatus }),
 });
 export type ReadinessResponse = z.infer<typeof ReadinessResponse>;

@@ -19,6 +19,7 @@
         "@stego/db": "workspace:*",
         "@stego/engine": "workspace:*",
         "@stego/image-io": "workspace:*",
+        "@stego/storage": "workspace:*",
         "zod": "4.6.7",
       },
     },
@@ -81,6 +82,10 @@
     },
     "packages/stego-engine": {
       "name": "@stego/engine",
+      "version": "0.0.0",
+    },
+    "packages/storage": {
+      "name": "@stego/storage",
       "version": "0.0.0",
     },
   },
@@ -408,6 +413,8 @@
     "@stego/image-io": ["@stego/image-io@workspace:packages/image-io"],
 
     "@stego/native": ["@stego/native@workspace:packages/native"],
+
+    "@stego/storage": ["@stego/storage@workspace:packages/storage"],
 
     "@stego/web": ["@stego/web@workspace:apps/web"],
 

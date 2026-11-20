@@ -59,6 +59,7 @@ function BackendCard() {
               {data.status}
             </Badge>
             <span className="text-muted-foreground">Redis: {data.checks.redis}</span>
+            <span className="text-muted-foreground">Storage: {data.checks.storage}</span>
           </>
         )}
       </CardContent>
