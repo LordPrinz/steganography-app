@@ -10,6 +10,8 @@ import { healthRoutes } from "./modules/health/routes.ts";
 
 const ACCESS_TTL_SECONDS = 15 * 60;
 const REFRESH_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+// Every body is small JSON so far. Bun applies this server-wide, so image uploads must revisit it.
+const MAX_BODY_BYTES = 64 * 1024;
 
 export interface ServerDeps {
   port: number;
@@ -20,7 +22,8 @@ export interface ServerDeps {
   jwtSecret: string;
   /** The web app's origin: the only one allowed to make state-changing requests. */
   appOrigin: string;
-  trustProxy: boolean;
+  /** Peers allowed to set X-Client-IP (see lib/client-ip.ts). */
+  trustedProxies: ReadonlySet<string>;
 }
 
 export function createServer({
@@ -31,7 +34,7 @@ export function createServer({
   refreshTokens,
   jwtSecret,
   appOrigin,
-  trustProxy,
+  trustedProxies,
 }: ServerDeps) {
   const auth = createAuthService({
     users,
@@ -43,6 +46,7 @@ export function createServer({
 
   return Bun.serve({
     port,
+    maxRequestBodySize: MAX_BODY_BYTES,
     routes: requireOrigin(
       {
         ...mount(API_PREFIX, healthRoutes({ kv, storage })),
@@ -54,7 +58,7 @@ export function createServer({
             accessTtlSeconds: ACCESS_TTL_SECONDS,
             refreshTtlMs: REFRESH_TTL_MS,
             secureCookies: appOrigin.startsWith("https:"),
-            trustProxy,
+            trustedProxies,
           }),
         ),
       },

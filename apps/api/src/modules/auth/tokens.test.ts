@@ -52,6 +52,15 @@ describe("access tokens", () => {
     expect(tokens.verify(other.sign(userId).token)).toBeNull();
   });
 
+  test("signs with a key derived from the secret, not the secret itself", () => {
+    const { token } = createAccessTokens({ secret, ttlSeconds: 900 }).sign(userId);
+    const [header, payload, signature] = token.split(".");
+    const rawHmac = new Bun.CryptoHasher("sha256", secret)
+      .update(`${header}.${payload}`)
+      .digest("base64url");
+    expect(signature).not.toBe(rawHmac);
+  });
+
   test("rejects alg=none and other headers", () => {
     const tokens = createAccessTokens({ secret, ttlSeconds: 900 });
     const claims = { sub: userId, jti: "j", iat: 0, exp: 9_999_999_999 };

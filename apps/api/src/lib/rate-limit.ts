@@ -10,6 +10,8 @@ export interface RateLimitOptions {
 
 export interface RateLimitResult {
   allowed: boolean;
+  /** Requests counted in the current window, including this one for `hit`. */
+  count: number;
   remaining: number;
   /** 0 when allowed; otherwise how long until the window resets (for `Retry-After`). */
   retryAfterMs: number;
@@ -50,6 +52,7 @@ export function createRateLimiter(
       const allowed = count <= limit;
       return {
         allowed,
+        count,
         remaining: Math.max(0, limit - count),
         retryAfterMs: allowed ? 0 : Math.max(0, ttlMs),
       };
@@ -59,6 +62,7 @@ export function createRateLimiter(
       const allowed = count < limit;
       return {
         allowed,
+        count,
         remaining: Math.max(0, limit - count),
         retryAfterMs: allowed ? 0 : windowMs,
       };

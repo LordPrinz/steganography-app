@@ -106,18 +106,29 @@ each kernel with a naive TS oracle, and an ASan/UBSan harness checks memory safe
 - Passwords: `Bun.password` (argon2id).
 - Auth: short-lived JWT access token + refresh token (hashed in DB, revocable), both in `httpOnly`,
   `SameSite=Lax` cookies. Same-origin API via Next rewrites, so no CORS.
-  - Access token: HS256 JWT signed with `JWT_SECRET` through Bun's HMAC (no JWT library), 15 minutes,
-    cookie path `/api/v1`. Logout puts its `jti` on a Redis denylist until it expires.
+  - Access token: HS256 JWT, 15 minutes, cookie path `/api/v1`. The MAC key is derived from `JWT_SECRET`
+    with HKDF and used through Bun's HMAC (no JWT library). Logout puts its `jti` on a Redis denylist
+    until it expires.
   - Refresh token: 256 random bits, 7 days, cookie path `/api/v1/auth`, stored as SHA-256. Every refresh
-    rotates it. Presenting a rotated token again means it leaked, so all of the user's sessions are revoked.
+    rotates it. A rotated token presented within 10 s of the rotation (two tabs refreshing at once) gets
+    a 401 and nothing else happens. Later than that it counts as leaked, and all of the user's sessions
+    are revoked.
   - CSRF: every state-changing request must carry `Origin: APP_ORIGIN`, otherwise 403. The check wraps
-    all routes in `createServer`, so new modules get it without opting in.
-  - Rate limits (fixed window, Redis): login 20 / 15 min per IP and 10 failures / 15 min per e-mail
-    and IP (only failures count, and never per e-mail alone, so nobody can lock another user out), register
-    5 / hour per IP, refresh 60 / 15 min per IP; 429 with `Retry-After`. Behind a proxy we control
-    (`TRUST_PROXY=true`) the client IP is the last `X-Forwarded-For` entry.
+    all routes in `createServer`. Non-browser clients (curl, scripts) have to send the header too.
+  - Request bodies are capped at 64 KiB.
+  - Rate limits (fixed window, Redis), 429 with `Retry-After`: login 20 / 15 min per IP and 10 failures
+    / 15 min per e-mail and IP (successful logins do not count), register 5 / hour per IP, refresh
+    60 / 15 min per IP. IPv6 clients are counted per /64.
+  - Guessing one account from many IPs: after 100 failures in an hour, each login for that account is
+    held back 100 ms per extra failure, at most 3 s. It is slowed down, never locked.
   - No account enumeration: register answers 202 whether or not the e-mail is taken, and login gives the
     same 401 for an unknown e-mail and a wrong password, with the same argon2 work in both cases.
+  - Client IP: Next cannot see the real connection address of a request (it fills in `X-Forwarded-For`
+    only when the client did not send one), so Caddy (`infra/Caddyfile`) sits in front of Next and sets
+    `X-Client-IP` from the TCP connection. Next passes it on, and the API believes it only from peers in
+    `TRUSTED_PROXIES` (the Next server); from anyone else it uses the socket address. **In production Next
+    must be reachable only through Caddy**, or clients can pick their own IP. Deployment (ST-23) has to
+    keep that.
 - Storage: private bucket, keys `users/{userId}/{uuid}.png`, short-lived presigned URLs issued only
   after an ownership check. Every query by id is scoped to the current user.
 - Uploads: format sniffed from bytes, pixel limit, size limit, metadata stripped.

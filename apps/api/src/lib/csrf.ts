@@ -5,11 +5,10 @@ const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 type Handler = (req: Request, ...rest: never[]) => unknown;
 
 /**
- * Puts an Origin check in front of every route handler, so routes added later are covered without
- * opting in. State-changing requests (POST, PUT, PATCH, DELETE…) need an Origin equal to
- * `allowedOrigin`; browsers always send one on such requests, so a missing or foreign Origin is a 403.
- * Auth cookies are SameSite=Lax as well; this closes the remaining same-site gap (e.g. another app on
- * a sibling subdomain).
+ * Puts an Origin check in front of every route handler. State-changing requests (POST, PUT, PATCH,
+ * DELETE…) need an Origin equal to `allowedOrigin`, otherwise 403. Browsers send Origin on such
+ * requests; other clients (curl, scripts) must set it themselves. SameSite=Lax cookies alone would
+ * still let a sibling subdomain post with the user's cookies.
  */
 export function requireOrigin<T extends Record<string, unknown>>(
   routes: T,

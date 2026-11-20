@@ -1,5 +1,4 @@
 import type { ApiError } from "@stego/contracts";
-import type { Server } from "bun";
 import type { z } from "zod";
 
 export function json<T>(body: T, init?: ResponseInit): Response {
@@ -53,16 +52,4 @@ export async function parseBody<S extends z.ZodType>(
     throw new HttpError(400, "invalid_request", "Invalid request body", details);
   }
   return parsed.data;
-}
-
-/**
- * The caller's IP. Behind a trusted proxy it is the last X-Forwarded-For entry, the one the proxy
- * itself appended; earlier entries are client-controlled.
- */
-export function clientIp(req: Request, server: Server<unknown>, trustProxy: boolean): string {
-  if (trustProxy) {
-    const forwarded = req.headers.get("x-forwarded-for")?.split(",").at(-1)?.trim();
-    if (forwarded) return forwarded;
-  }
-  return server.requestIP(req)?.address ?? "unknown";
 }

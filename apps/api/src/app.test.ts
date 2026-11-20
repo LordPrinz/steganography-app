@@ -3,7 +3,7 @@ import { ApiError, HealthResponse, ReadinessResponse } from "@stego/contracts";
 import { createMemoryObjectStore } from "@stego/storage";
 import { createServer } from "./app.ts";
 import { createMemoryStore } from "./lib/kv/memory.ts";
-import { testServerDeps } from "./testing.ts";
+import { testServerDeps } from "./testing/server-deps.ts";
 
 const kv = createMemoryStore();
 const storage = createMemoryObjectStore();

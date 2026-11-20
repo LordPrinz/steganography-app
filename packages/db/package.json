@@ -5,9 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./memory": "./src/auth.memory.ts",
     "./migrator": "./src/migrator.ts",
-    "./testing": "./src/testing.ts"
+    "./testing": "./src/testing/index.ts"
   },
   "scripts": {
     "typecheck": "tsc -p .",

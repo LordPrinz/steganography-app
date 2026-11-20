@@ -10,10 +10,25 @@ export interface UserRepository {
 
 export type RotateResult =
   | { status: "rotated"; userId: string }
-  /** The token was already rotated: it leaked, so every session of the user was revoked. */
+  /**
+   * The token was rotated more than the grace window ago: it leaked, so every session of the user was
+   * revoked.
+   */
   | { status: "reused"; userId: string }
+  /**
+   * Rotated within the grace window, most likely by another tab refreshing at the same moment. The
+   * token is not accepted, but nothing is revoked.
+   */
+  | { status: "superseded" }
   /** Unknown, expired or revoked by logout. */
   | { status: "invalid" };
+
+export interface RefreshTokenRepositoryOptions {
+  /** How long after a rotation the old token counts as a concurrent refresh rather than reuse. */
+  reuseGraceMs?: number;
+}
+
+export const DEFAULT_REUSE_GRACE_MS = 10_000;
 
 export interface NewRefreshToken {
   tokenHash: string;
@@ -49,7 +64,11 @@ export function createUserRepository(sql: SQL): UserRepository {
   };
 }
 
-export function createRefreshTokenRepository(sql: SQL): RefreshTokenRepository {
+export function createRefreshTokenRepository(
+  sql: SQL,
+  { reuseGraceMs = DEFAULT_REUSE_GRACE_MS }: RefreshTokenRepositoryOptions = {},
+): RefreshTokenRepository {
+  const graceSecs = reuseGraceMs / 1000;
   return {
     async issue(userId, { tokenHash, expiresAt }) {
       await sql`
@@ -61,7 +80,14 @@ export function createRefreshTokenRepository(sql: SQL): RefreshTokenRepository {
     rotate(oldHash, { tokenHash, expiresAt }) {
       const nextId = crypto.randomUUID();
       return sql.begin(async (tx): Promise<RotateResult> => {
-        // The row lock taken by UPDATE makes a concurrent rotation of the same token see it revoked.
+        const [owner] = await tx<Pick<RefreshTokenRow, "user_id">[]>`
+          SELECT user_id FROM refresh_tokens WHERE token_hash = ${oldHash}
+        `;
+        if (!owner) return { status: "invalid" };
+        // Serialises rotations and family revocation per user, so revoking everything cannot miss a
+        // successor that a concurrent rotation is inserting.
+        await tx`SELECT 1 FROM users WHERE id = ${owner.user_id} FOR UPDATE`;
+
         const [rotated] = await tx<{ user_id: string }[]>`
           WITH old AS (
             UPDATE refresh_tokens SET revoked_at = now(), replaced_by = ${nextId}
@@ -74,15 +100,22 @@ export function createRefreshTokenRepository(sql: SQL): RefreshTokenRepository {
         `;
         if (rotated) return { status: "rotated", userId: rotated.user_id };
 
-        const [old] = await tx<Pick<RefreshTokenRow, "user_id" | "replaced_by">[]>`
-          SELECT user_id, replaced_by FROM refresh_tokens WHERE token_hash = ${oldHash}
+        // clock_timestamp, not now(): now() is when this transaction began, which can be before a
+        // successor that a concurrent rotation created while we waited for the lock.
+        const [old] = await tx<{ replaced_by: string | null; in_grace: boolean | null }[]>`
+          SELECT old.replaced_by,
+                 successor.created_at > clock_timestamp() - make_interval(secs => ${graceSecs}) AS in_grace
+          FROM refresh_tokens old
+          LEFT JOIN refresh_tokens successor ON successor.id = old.replaced_by
+          WHERE old.token_hash = ${oldHash}
         `;
         if (!old?.replaced_by) return { status: "invalid" };
+        if (old.in_grace) return { status: "superseded" };
         await tx`
           UPDATE refresh_tokens SET revoked_at = now()
-          WHERE user_id = ${old.user_id} AND revoked_at IS NULL
+          WHERE user_id = ${owner.user_id} AND revoked_at IS NULL
         `;
-        return { status: "reused", userId: old.user_id };
+        return { status: "reused", userId: owner.user_id };
       });
     },
 

@@ -24,7 +24,7 @@ const server = createServer({
   refreshTokens: createRefreshTokenRepository(db),
   jwtSecret: env.JWT_SECRET,
   appOrigin: env.APP_ORIGIN,
-  trustProxy: env.TRUST_PROXY,
+  trustedProxies: env.TRUSTED_PROXIES,
 });
 
 console.info(`API listening on ${server.url}`);

@@ -71,6 +71,17 @@ services:
       [ $$code = 200 ] || [ $$code = 409 ]
       "
 
+  # Reverse proxy in front of `bun run dev:web` on the host; sets X-Client-IP for per-IP rate limits.
+  # Browse http://localhost:8080 to go through it (see .env.example, APP_ORIGIN and TRUSTED_PROXIES).
+  caddy:
+    image: caddy:2.10.2-alpine
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
 volumes:
   postgres-data:
   rustfs-data:

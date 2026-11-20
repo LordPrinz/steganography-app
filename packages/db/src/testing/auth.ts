@@ -1,5 +1,10 @@
-import type { RefreshTokenRepository, UserRepository } from "./auth.ts";
-import type { RefreshTokenRow, UserRow } from "./types.ts";
+import {
+  DEFAULT_REUSE_GRACE_MS,
+  type RefreshTokenRepository,
+  type RefreshTokenRepositoryOptions,
+  type UserRepository,
+} from "../auth.ts";
+import type { RefreshTokenRow, UserRow } from "../types.ts";
 
 /** In-process user repository for tests; passes the same contract suite as the Postgres one. */
 export function createMemoryUserRepository(): UserRepository {
@@ -24,7 +29,9 @@ export function createMemoryUserRepository(): UserRepository {
 }
 
 /** In-process refresh token repository for tests; same semantics as the Postgres one. */
-export function createMemoryRefreshTokenRepository(): RefreshTokenRepository {
+export function createMemoryRefreshTokenRepository({
+  reuseGraceMs = DEFAULT_REUSE_GRACE_MS,
+}: RefreshTokenRepositoryOptions = {}): RefreshTokenRepository {
   const tokens = new Map<string, RefreshTokenRow>();
 
   function insert(userId: string, tokenHash: string, expiresAt: Date): RefreshTokenRow {
@@ -54,6 +61,11 @@ export function createMemoryRefreshTokenRepository(): RefreshTokenRepository {
         return { status: "rotated", userId: old.user_id };
       }
       if (!old?.replaced_by) return { status: "invalid" };
+      const successorId = old.replaced_by;
+      const successor = tokens.values().find((row) => row.id === successorId);
+      if (successor && successor.created_at.getTime() > now.getTime() - reuseGraceMs) {
+        return { status: "superseded" };
+      }
       for (const row of tokens.values()) {
         if (row.user_id === old.user_id && !row.revoked_at) row.revoked_at = now;
       }

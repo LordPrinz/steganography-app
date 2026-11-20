@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { hkdfSync, timingSafeEqual } from "node:crypto";
 
 export interface AccessClaims {
   /** User id. */
@@ -34,8 +34,10 @@ export function createAccessTokens({
   ttlSeconds,
   now = Date.now,
 }: AccessTokenOptions): AccessTokens {
+  // A key of its own, so JWT_SECRET can later key other things without one leaking into another.
+  const key = new Uint8Array(hkdfSync("sha256", secret, "", "access-token", 32));
   const mac = (input: string) =>
-    new Bun.CryptoHasher("sha256", secret).update(input).digest() as Buffer;
+    new Bun.CryptoHasher("sha256", key).update(input).digest() as Buffer;
 
   return {
     sign(userId) {

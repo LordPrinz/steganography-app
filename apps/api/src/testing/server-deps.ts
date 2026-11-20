@@ -1,7 +1,7 @@
-import { createMemoryRefreshTokenRepository, createMemoryUserRepository } from "@stego/db/memory";
+import { createMemoryRefreshTokenRepository, createMemoryUserRepository } from "@stego/db/testing";
 import { createMemoryObjectStore } from "@stego/storage";
-import type { ServerDeps } from "./app.ts";
-import { createMemoryStore } from "./lib/kv/memory.ts";
+import type { ServerDeps } from "../app.ts";
+import { createMemoryStore } from "../lib/kv/memory.ts";
 
 export const TEST_ORIGIN = "http://localhost:3000";
 export const TEST_JWT_SECRET = "test-secret-that-is-at-least-32-chars";
@@ -16,7 +16,7 @@ export function testServerDeps(overrides: Partial<ServerDeps> = {}): ServerDeps 
     refreshTokens: createMemoryRefreshTokenRepository(),
     jwtSecret: TEST_JWT_SECRET,
     appOrigin: TEST_ORIGIN,
-    trustProxy: false,
+    trustedProxies: new Set(),
     ...overrides,
   };
 }

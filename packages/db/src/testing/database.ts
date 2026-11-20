@@ -1,5 +1,5 @@
 import { SQL } from "bun";
-import { migrate } from "./migrator.ts";
+import { migrate } from "../migrator.ts";
 
 export interface TestDatabase {
   /** Pool whose connections all use a fresh, migrated schema. */

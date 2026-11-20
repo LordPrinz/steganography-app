@@ -1,11 +1,17 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { ApiError, AuthResponse } from "@stego/contracts";
-import { createRefreshTokenRepository, createUserRepository } from "@stego/db";
-import { createTestDatabase } from "@stego/db/testing";
+import {
+  createRefreshTokenRepository,
+  createUserRepository,
+  type RefreshTokenRepositoryOptions,
+} from "@stego/db";
+import { createMemoryRefreshTokenRepository, createTestDatabase } from "@stego/db/testing";
 import { createServer, type ServerDeps } from "../../app.ts";
+import { createMemoryStore } from "../../lib/kv/memory.ts";
 import type { KeyValueStore } from "../../lib/kv/store.ts";
-import { TEST_JWT_SECRET, TEST_ORIGIN, testServerDeps } from "../../testing.ts";
-import { ACCESS_COOKIE, AUTH_RATE_LIMITS, REFRESH_COOKIE } from "./routes.ts";
+import { createRateLimiter } from "../../lib/rate-limit.ts";
+import { TEST_JWT_SECRET, TEST_ORIGIN, testServerDeps } from "../../testing/server-deps.ts";
+import { ACCESS_COOKIE, AUTH_RATE_LIMITS, loginDelayMs, REFRESH_COOKIE } from "./routes.ts";
 import { createAccessTokens } from "./tokens.ts";
 
 // The flows run against the in-memory repositories, and again against Postgres when
@@ -21,16 +27,26 @@ afterAll(async () => {
   await testDb?.teardown();
 });
 
-const backends: [string, () => Promise<Partial<ServerDeps>>][] = [["memory", async () => ({})]];
+type Backend = (tokens?: RefreshTokenRepositoryOptions) => Promise<Partial<ServerDeps>>;
+
+const backends: [string, Backend][] = [
+  ["memory", async (tokens) => ({ refreshTokens: createMemoryRefreshTokenRepository(tokens) })],
+];
 if (sql) {
   backends.push([
     "postgres",
-    async () => {
+    async (tokens) => {
       await sql`TRUNCATE users CASCADE`;
-      return { users: createUserRepository(sql), refreshTokens: createRefreshTokenRepository(sql) };
+      return {
+        users: createUserRepository(sql),
+        refreshTokens: createRefreshTokenRepository(sql, tokens),
+      };
     },
   ]);
 }
+
+// The test client connects over loopback, so these peers stand in for the Next server behind Caddy.
+const LOOPBACK = new Set(["127.0.0.1", "::1"]);
 
 const EMAIL = "ann@example.com";
 const PASSWORD = "correct horse battery";
@@ -84,8 +100,11 @@ afterEach(() => {
 });
 
 describe.each(backends)("auth API (%s)", (_name, backend) => {
-  async function start(overrides: Partial<ServerDeps> = {}) {
-    const server = createServer(testServerDeps({ ...(await backend()), ...overrides }));
+  async function start(
+    overrides: Partial<ServerDeps> = {},
+    tokens?: RefreshTokenRepositoryOptions,
+  ) {
+    const server = createServer(testServerDeps({ ...(await backend(tokens)), ...overrides }));
     servers.push(server);
     return new Client(server.url);
   }
@@ -224,8 +243,10 @@ describe.each(backends)("auth API (%s)", (_name, backend) => {
     expect((await client.request("GET", "/auth/me")).status).toBe(200);
   });
 
-  test("reusing a refresh token after rotation revokes the session", async () => {
-    const client = await loggedIn();
+  test("reusing a refresh token after the grace window revokes the session", async () => {
+    const client = await start({}, { reuseGraceMs: 0 });
+    await client.register();
+    await client.login();
     const stolen = client.cookies.get(REFRESH_COOKIE) ?? "";
     expect((await client.request("POST", "/auth/refresh")).status).toBe(200);
     const rotated = client.cookies.get(REFRESH_COOKIE) ?? "";
@@ -238,6 +259,23 @@ describe.each(backends)("auth API (%s)", (_name, backend) => {
     // The legitimate holder's newer token died with it.
     client.cookies.set(REFRESH_COOKIE, rotated);
     expect((await client.request("POST", "/auth/refresh")).status).toBe(401);
+  });
+
+  test("a refresh token rotated moments ago is refused without ending the session", async () => {
+    const client = await loggedIn();
+    const old = client.cookies.get(REFRESH_COOKIE) ?? "";
+    expect((await client.request("POST", "/auth/refresh")).status).toBe(200);
+    const rotated = client.cookies.get(REFRESH_COOKIE) ?? "";
+
+    // A second tab still holding the old token, within the 10 s grace window.
+    client.cookies.set(REFRESH_COOKIE, old);
+    const late = await client.request("POST", "/auth/refresh");
+    expect(late.status).toBe(401);
+    // No cookie deletion: in a browser that would wipe the cookies the first tab just received.
+    expect(late.headers.getSetCookie()).toEqual([]);
+
+    client.cookies.set(REFRESH_COOKIE, rotated);
+    expect((await client.request("POST", "/auth/refresh")).status).toBe(200);
   });
 
   test("refresh without a cookie is 401", async () => {
@@ -265,12 +303,12 @@ describe.each(backends)("auth API (%s)", (_name, backend) => {
 
   describe("login failures", () => {
     const { limit, windowMs } = AUTH_RATE_LIMITS.loginFailures;
-    const from = (ip: string) => ({ "x-forwarded-for": ip });
+    const from = (ip: string) => ({ "x-client-ip": ip });
     const login = (client: Client, ip: string, email = EMAIL, password = "wrong password") =>
       client.request("POST", "/auth/login", { email, password }, from(ip));
 
     test("repeated failures from one IP get 429 with Retry-After", async () => {
-      const client = await start({ trustProxy: true });
+      const client = await start({ trustedProxies: LOOPBACK });
       await client.register();
       for (let i = 0; i < limit; i++) {
         expect((await login(client, "10.0.0.1")).status).toBe(401);
@@ -285,7 +323,7 @@ describe.each(backends)("auth API (%s)", (_name, backend) => {
     });
 
     test("another IP exhausting failures cannot lock the owner out", async () => {
-      const client = await start({ trustProxy: true });
+      const client = await start({ trustedProxies: LOOPBACK });
       await client.register();
       for (let i = 0; i <= limit; i++) await login(client, "203.0.113.9");
       expect((await login(client, "203.0.113.9", EMAIL, PASSWORD)).status).toBe(429);
@@ -293,11 +331,42 @@ describe.each(backends)("auth API (%s)", (_name, backend) => {
     });
 
     test("successful logins do not count as failures", async () => {
-      const client = await start({ trustProxy: true });
+      const client = await start({ trustedProxies: LOOPBACK });
       await client.register();
       for (let i = 0; i <= limit; i++) {
         expect((await login(client, "10.0.0.1", EMAIL, PASSWORD)).status).toBe(200);
       }
+    });
+
+    test("many failures for one account slow its logins down instead of blocking them", async () => {
+      const kv = createMemoryStore();
+      const client = await start({ kv, trustedProxies: LOOPBACK });
+      await client.register();
+      const account = createRateLimiter(kv, AUTH_RATE_LIMITS.loginAccountFailures);
+      // Failures spread over many IPs, more than the account limit.
+      const over = 3;
+      for (let i = 0; i < AUTH_RATE_LIMITS.loginAccountFailures.limit + over; i++) {
+        await account.hit(EMAIL);
+      }
+
+      const started = performance.now();
+      const res = await login(client, "10.0.0.1", EMAIL, PASSWORD);
+      expect(res.status).toBe(200);
+      expect(performance.now() - started).toBeGreaterThanOrEqual(loginDelayMs(100 + over) - 10);
+
+      // A failed login counts against the account.
+      const before = (await account.peek(EMAIL)).count;
+      await login(client, "10.0.0.2");
+      expect((await account.peek(EMAIL)).count).toBe(before + 1);
+    });
+
+    test("the delay grows per failure over the account limit and is capped", () => {
+      const { limit } = AUTH_RATE_LIMITS.loginAccountFailures;
+      expect(loginDelayMs(0)).toBe(0);
+      expect(loginDelayMs(limit)).toBe(0);
+      expect(loginDelayMs(limit + 1)).toBe(100);
+      expect(loginDelayMs(limit + 5)).toBe(500);
+      expect(loginDelayMs(limit * 10)).toBe(3_000);
     });
   });
 
@@ -312,31 +381,60 @@ describe.each(backends)("auth API (%s)", (_name, backend) => {
     expect(limited.headers.get("retry-after")).not.toBeNull();
   });
 
-  test("a trusted proxy's X-Forwarded-For decides the client IP", async () => {
-    const client = await start({ trustProxy: true });
+  describe("client IP", () => {
     const { limit } = AUTH_RATE_LIMITS.registerIp;
-    const from = (ip: string) => ({ "x-forwarded-for": `1.2.3.4, ${ip}` });
-    for (let i = 0; i < limit; i++) {
-      await client.request(
+    const register = (client: Client, n: number, headers: Record<string, string>) =>
+      client.request(
         "POST",
         "/auth/register",
-        { email: `u${i}@x.io`, password: PASSWORD },
-        from("10.0.0.1"),
+        { email: `u${n}@x.io`, password: PASSWORD },
+        headers,
       );
+
+    async function exhaust(client: Client, headers: Record<string, string>) {
+      for (let i = 0; i < limit; i++) await register(client, i, headers);
     }
-    const sameIp = await client.request(
-      "POST",
-      "/auth/register",
-      { email: "a@x.io", password: PASSWORD },
-      from("10.0.0.1"),
-    );
-    const otherIp = await client.request(
-      "POST",
-      "/auth/register",
-      { email: "b@x.io", password: PASSWORD },
-      from("10.0.0.2"),
-    );
-    expect([sameIp.status, otherIp.status]).toEqual([429, 202]);
+
+    test("a trusted proxy's X-Client-IP decides the bucket", async () => {
+      const client = await start({ trustedProxies: LOOPBACK });
+      await exhaust(client, { "x-client-ip": "10.0.0.1" });
+      const same = await register(client, 100, { "x-client-ip": "10.0.0.1" });
+      const other = await register(client, 101, { "x-client-ip": "10.0.0.2" });
+      expect([same.status, other.status]).toEqual([429, 202]);
+    });
+
+    test("X-Client-IP and X-Forwarded-For from an untrusted peer are ignored", async () => {
+      const client = await start();
+      await exhaust(client, { "x-client-ip": "10.0.0.1" });
+      const spoofed = await register(client, 100, {
+        "x-client-ip": "10.0.0.2",
+        "x-forwarded-for": "10.0.0.3",
+      });
+      expect(spoofed.status).toBe(429);
+    });
+
+    test("X-Forwarded-For is ignored even from a trusted peer", async () => {
+      const client = await start({ trustedProxies: LOOPBACK });
+      await exhaust(client, { "x-forwarded-for": "10.0.0.1" });
+      expect((await register(client, 100, { "x-forwarded-for": "10.0.0.2" })).status).toBe(429);
+    });
+
+    test("IPv6 addresses share a bucket per /64", async () => {
+      const client = await start({ trustedProxies: LOOPBACK });
+      await exhaust(client, { "x-client-ip": "2001:db8:1:2::1" });
+      const samePrefix = await register(client, 100, { "x-client-ip": "2001:db8:1:2:ffff::9" });
+      const otherPrefix = await register(client, 101, { "x-client-ip": "2001:db8:1:3::1" });
+      expect([samePrefix.status, otherPrefix.status]).toEqual([429, 202]);
+    });
+  });
+
+  test("bodies over 64 KiB are rejected", async () => {
+    const client = await start();
+    const res = await client.request("POST", "/auth/login", {
+      email: EMAIL,
+      password: "x".repeat(70 * 1024),
+    });
+    expect(res.status).toBe(413);
   });
 
   test("state-changing requests need the app's Origin", async () => {

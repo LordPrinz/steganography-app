@@ -9,6 +9,12 @@ export interface Session {
   refreshToken: string;
 }
 
+export type RefreshResult =
+  | { status: "ok"; session: Session }
+  /** Another request rotated this token moments ago (two tabs); the caller keeps its cookies. */
+  | { status: "superseded" }
+  | { status: "invalid" };
+
 export interface AuthService {
   /**
    * Creates the account unless the e-mail is taken. Both cases look the same to the caller (and take
@@ -17,8 +23,8 @@ export interface AuthService {
   register(email: string, password: string): Promise<void>;
   /** Null for an unknown e-mail or a wrong password alike. */
   login(email: string, password: string): Promise<Session | null>;
-  /** Rotates the refresh token. Null when it is invalid, expired, revoked or reused. */
-  refresh(refreshToken: string): Promise<Session | null>;
+  /** Rotates the refresh token. Anything but a live token is refused; reuse also revokes the family. */
+  refresh(refreshToken: string): Promise<RefreshResult>;
   /** Revokes whichever of the two tokens is given. */
   logout(tokens: { accessToken?: string; refreshToken?: string }): Promise<void>;
   /** The user behind a valid, not logged-out access token, otherwise null. */
@@ -88,14 +94,13 @@ export function createAuthService({
         tokenHash: hashRefreshToken(next),
         expiresAt: refreshExpiry(),
       });
-      if (result.status !== "rotated") {
-        if (result.status === "reused") {
-          console.warn(`Refresh token reuse for user ${result.userId}; all sessions revoked`);
-        }
-        return null;
+      if (result.status === "superseded") return { status: "superseded" };
+      if (result.status === "reused") {
+        console.warn(`Refresh token reuse for user ${result.userId}; all sessions revoked`);
       }
+      if (result.status !== "rotated") return { status: "invalid" };
       const user = await users.findById(result.userId);
-      return user ? session(user, next) : null;
+      return user ? { status: "ok", session: session(user, next) } : { status: "invalid" };
     },
 
     async logout({ accessToken, refreshToken }) {

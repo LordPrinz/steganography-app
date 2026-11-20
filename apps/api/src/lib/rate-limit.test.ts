@@ -21,11 +21,22 @@ describe("rate limiter", () => {
       windowMs: 60_000,
     });
 
-    expect(await limiter.hit("1.2.3.4")).toEqual({ allowed: true, remaining: 1, retryAfterMs: 0 });
-    expect(await limiter.hit("1.2.3.4")).toEqual({ allowed: true, remaining: 0, retryAfterMs: 0 });
+    expect(await limiter.hit("1.2.3.4")).toEqual({
+      allowed: true,
+      count: 1,
+      remaining: 1,
+      retryAfterMs: 0,
+    });
+    expect(await limiter.hit("1.2.3.4")).toEqual({
+      allowed: true,
+      count: 2,
+      remaining: 0,
+      retryAfterMs: 0,
+    });
     clock.advance(10_000);
     expect(await limiter.hit("1.2.3.4")).toEqual({
       allowed: false,
+      count: 3,
       remaining: 0,
       retryAfterMs: 50_000,
     });
@@ -37,12 +48,32 @@ describe("rate limiter", () => {
       limit: 2,
       windowMs: 60_000,
     });
-    expect(await limiter.peek("a")).toEqual({ allowed: true, remaining: 2, retryAfterMs: 0 });
+    expect(await limiter.peek("a")).toEqual({
+      allowed: true,
+      count: 0,
+      remaining: 2,
+      retryAfterMs: 0,
+    });
     await limiter.hit("a");
-    expect(await limiter.peek("a")).toEqual({ allowed: true, remaining: 1, retryAfterMs: 0 });
+    expect(await limiter.peek("a")).toEqual({
+      allowed: true,
+      count: 1,
+      remaining: 1,
+      retryAfterMs: 0,
+    });
     await limiter.hit("a");
-    expect(await limiter.peek("a")).toEqual({ allowed: false, remaining: 0, retryAfterMs: 60_000 });
-    expect(await limiter.peek("a")).toEqual({ allowed: false, remaining: 0, retryAfterMs: 60_000 });
+    expect(await limiter.peek("a")).toEqual({
+      allowed: false,
+      count: 2,
+      remaining: 0,
+      retryAfterMs: 60_000,
+    });
+    expect(await limiter.peek("a")).toEqual({
+      allowed: false,
+      count: 2,
+      remaining: 0,
+      retryAfterMs: 60_000,
+    });
   });
 
   test("the window resets", async () => {

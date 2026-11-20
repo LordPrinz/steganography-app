@@ -1,6 +1,7 @@
 import { type AuthResponse, type AuthUser, LoginRequest, RegisterRequest } from "@stego/contracts";
 import type { BunRequest, CookieInit, Server } from "bun";
-import { API_PREFIX, clientIp, errorResponse, HttpError, json, parseBody } from "../../lib/http.ts";
+import { clientIp, ipBucket } from "../../lib/client-ip.ts";
+import { API_PREFIX, errorResponse, HttpError, json, parseBody } from "../../lib/http.ts";
 import type { KeyValueStore } from "../../lib/kv/store.ts";
 import {
   createRateLimiter,
@@ -16,15 +17,30 @@ export const REFRESH_COOKIE = "refresh_token";
 const MINUTE = 60_000;
 
 /**
- * Fixed windows (ADR 0003). Login failures are counted per e-mail and IP, and only failures: a bucket per
- * e-mail alone would let anyone lock a user out by sending wrong passwords for their address.
+ * Fixed windows (ADR 0003). IPs are bucketed by `ipBucket` (IPv6 per /64). Login failures are counted
+ * per e-mail and IP and only failures count, so another client's wrong guesses never get a user a 429.
+ * Failures per account are counted too, but they slow logins down (`loginDelayMs`) instead of blocking.
  */
 export const AUTH_RATE_LIMITS = {
   loginIp: { name: "login-ip", limit: 20, windowMs: 15 * MINUTE },
   loginFailures: { name: "login-failures", limit: 10, windowMs: 15 * MINUTE },
+  loginAccountFailures: { name: "login-account-failures", limit: 100, windowMs: 60 * MINUTE },
   registerIp: { name: "register-ip", limit: 5, windowMs: 60 * MINUTE },
   refreshIp: { name: "refresh-ip", limit: 60, windowMs: 15 * MINUTE },
 } satisfies Record<string, RateLimitOptions>;
+
+const LOGIN_DELAY_STEP_MS = 100;
+const MAX_LOGIN_DELAY_MS = 3_000;
+
+/**
+ * Delay before answering a login for an account with this many recent failures: none up to the
+ * account limit, then 100 ms more per failure, capped at 3 s. It slows guessing spread over many IPs
+ * without locking the owner out.
+ */
+export function loginDelayMs(accountFailures: number): number {
+  const over = accountFailures - AUTH_RATE_LIMITS.loginAccountFailures.limit;
+  return over <= 0 ? 0 : Math.min(MAX_LOGIN_DELAY_MS, over * LOGIN_DELAY_STEP_MS);
+}
 
 export interface AuthRoutesDeps {
   auth: AuthService;
@@ -33,7 +49,8 @@ export interface AuthRoutesDeps {
   refreshTtlMs: number;
   /** Secure cookies need HTTPS; true whenever the app origin is https. */
   secureCookies: boolean;
-  trustProxy: boolean;
+  /** Peers whose `X-Client-IP` header is believed (see `clientIp`). */
+  trustedProxies: ReadonlySet<string>;
 }
 
 /** The guard every protected endpoint calls: the current user, or a 401. */
@@ -54,12 +71,14 @@ export function authRoutes({
   accessTtlSeconds,
   refreshTtlMs,
   secureCookies,
-  trustProxy,
+  trustedProxies,
 }: AuthRoutesDeps) {
   const limiters = Object.fromEntries(
     Object.entries(AUTH_RATE_LIMITS).map(([key, options]) => [key, createRateLimiter(kv, options)]),
   ) as Record<keyof typeof AUTH_RATE_LIMITS, RateLimiter>;
   const requireUser = createRequireUser(auth);
+  const ip = (req: Request, server: Server<unknown>) =>
+    ipBucket(clientIp(req, server, trustedProxies));
 
   // The refresh cookie only travels to the auth endpoints; the access cookie to the whole API.
   const accessCookie: CookieInit = {
@@ -90,7 +109,7 @@ export function authRoutes({
   return {
     "/auth/register": {
       POST: async (req: BunRequest, server: Server<unknown>) => {
-        await enforce(() => limiters.registerIp.hit(clientIp(req, server, trustProxy)));
+        await enforce(() => limiters.registerIp.hit(ip(req, server)));
         const { email, password } = await parseBody(req, RegisterRequest);
         await auth.register(email, password);
         return new Response(null, { status: 202 });
@@ -99,14 +118,24 @@ export function authRoutes({
 
     "/auth/login": {
       POST: async (req: BunRequest, server: Server<unknown>) => {
-        const ip = clientIp(req, server, trustProxy);
-        await enforce(() => limiters.loginIp.hit(ip));
+        const from = ip(req, server);
+        await enforce(() => limiters.loginIp.hit(from));
         const { email, password } = await parseBody(req, LoginRequest);
-        const failureKey = JSON.stringify([email, ip]);
+        const failureKey = JSON.stringify([email, from]);
         await enforce(() => limiters.loginFailures.peek(failureKey));
+        // Applied whatever the password, so the delay does not hint at whether a guess was right.
+        const accountFailures = await limiters.loginAccountFailures
+          .peek(email)
+          .then((result) => result.count)
+          .catch(() => 0);
+        await Bun.sleep(loginDelayMs(accountFailures));
+
         const session = await auth.login(email, password);
         if (!session) {
-          await limiters.loginFailures.hit(failureKey).catch((error) => {
+          await Promise.all([
+            limiters.loginFailures.hit(failureKey),
+            limiters.loginAccountFailures.hit(email),
+          ]).catch((error) => {
             console.error("Rate limiter unavailable; login failure not counted", error);
           });
           throw new HttpError(401, "invalid_credentials", "Invalid e-mail or password");
@@ -117,15 +146,14 @@ export function authRoutes({
 
     "/auth/refresh": {
       POST: async (req: BunRequest, server: Server<unknown>) => {
-        await enforce(() => limiters.refreshIp.hit(clientIp(req, server, trustProxy)));
+        await enforce(() => limiters.refreshIp.hit(ip(req, server)));
         const token = req.cookies.get(REFRESH_COOKIE);
-        const session = token ? await auth.refresh(token) : null;
-        if (!session) {
-          // Returned, not thrown: Bun only attaches cookie changes to a handler's own response.
-          clearSession(req);
-          return errorResponse(new HttpError(401, "unauthorized", "Session expired"));
-        }
-        return setSession(req, session);
+        const result = token ? await auth.refresh(token) : ({ status: "invalid" } as const);
+        if (result.status === "ok") return setSession(req, result.session);
+        // A superseded token means another tab just got fresh cookies; clearing them would log it out.
+        // Returned, not thrown: Bun only attaches cookie changes to a handler's own response.
+        if (result.status === "invalid") clearSession(req);
+        return errorResponse(new HttpError(401, "unauthorized", "Session expired"));
       },
     },
 

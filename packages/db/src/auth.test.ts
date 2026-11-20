@@ -1,12 +1,16 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { createMemoryRefreshTokenRepository, createMemoryUserRepository } from "./auth.memory.ts";
 import {
   createRefreshTokenRepository,
   createUserRepository,
   type RefreshTokenRepository,
+  type RefreshTokenRepositoryOptions,
   type UserRepository,
 } from "./auth.ts";
-import { createTestDatabase } from "./testing.ts";
+import {
+  createMemoryRefreshTokenRepository,
+  createMemoryUserRepository,
+  createTestDatabase,
+} from "./testing/index.ts";
 
 // Shared contract: the Postgres repositories and the in-memory fakes the API tests use must agree.
 // The Postgres run needs TEST_DATABASE_URL.
@@ -26,21 +30,26 @@ interface Repos {
   tokens: RefreshTokenRepository;
 }
 
-const adapters: [string, () => Promise<Repos>][] = [
+type Make = (options?: RefreshTokenRepositoryOptions) => Promise<Repos>;
+
+const adapters: [string, Make][] = [
   [
     "memory",
-    async () => ({
+    async (options) => ({
       users: createMemoryUserRepository(),
-      tokens: createMemoryRefreshTokenRepository(),
+      tokens: createMemoryRefreshTokenRepository(options),
     }),
   ],
 ];
 if (sql) {
   adapters.push([
     "postgres",
-    async () => {
+    async (options) => {
       await sql`TRUNCATE users CASCADE`;
-      return { users: createUserRepository(sql), tokens: createRefreshTokenRepository(sql) };
+      return {
+        users: createUserRepository(sql),
+        tokens: createRefreshTokenRepository(sql, options),
+      };
     },
   ]);
 }
@@ -53,12 +62,14 @@ describe.each(adapters)("auth repositories (%s)", (_name, make) => {
   let tokens: RefreshTokenRepository;
   let userId: string;
 
-  beforeEach(async () => {
-    ({ users, tokens } = await make());
+  async function setup(options?: RefreshTokenRepositoryOptions) {
+    ({ users, tokens } = await make(options));
     const user = await users.create("a@x.io", "hash");
     if (!user) throw new Error("setup: user not created");
     userId = user.id;
-  });
+  }
+
+  beforeEach(() => setup());
 
   test("create returns null for a taken e-mail; find by e-mail and id", async () => {
     expect(await users.create("a@x.io", "other")).toBeNull();
@@ -73,14 +84,23 @@ describe.each(adapters)("auth repositories (%s)", (_name, make) => {
     expect(await tokens.rotate("t2", next("t3"))).toEqual({ status: "rotated", userId });
   });
 
-  test("reusing a rotated token revokes every session of the user", async () => {
+  test("reusing a rotated token after the grace window revokes every session of the user", async () => {
+    await setup({ reuseGraceMs: 100 });
     await tokens.issue(userId, next("t1"));
     await tokens.issue(userId, next("other-device"));
     await tokens.rotate("t1", next("t2"));
+    await Bun.sleep(150);
 
     expect(await tokens.rotate("t1", next("t3"))).toEqual({ status: "reused", userId });
     expect(await tokens.rotate("t2", next("t4"))).toEqual({ status: "invalid" });
     expect(await tokens.rotate("other-device", next("t5"))).toEqual({ status: "invalid" });
+  });
+
+  test("a rotated token presented within the grace window is refused but revokes nothing", async () => {
+    await tokens.issue(userId, next("t1"));
+    await tokens.rotate("t1", next("t2"));
+    expect(await tokens.rotate("t1", next("t3"))).toEqual({ status: "superseded" });
+    expect(await tokens.rotate("t2", next("t4"))).toEqual({ status: "rotated", userId });
   });
 
   test("concurrent rotations of one token let exactly one through", async () => {
@@ -89,7 +109,20 @@ describe.each(adapters)("auth repositories (%s)", (_name, make) => {
       tokens.rotate("t1", next("a")),
       tokens.rotate("t1", next("b")),
     ]);
+    expect(results.map((r) => r.status).sort()).toEqual(["rotated", "superseded"]);
+  });
+
+  test("without a grace window the loser of a concurrent rotation revokes the winner's token", async () => {
+    await setup({ reuseGraceMs: 0 });
+    await tokens.issue(userId, next("t1"));
+    const results = await Promise.all([
+      tokens.rotate("t1", next("a")),
+      tokens.rotate("t1", next("b")),
+    ]);
     expect(results.map((r) => r.status).sort()).toEqual(["reused", "rotated"]);
+    // The family revocation saw the successor inserted by the concurrent rotation.
+    expect(await tokens.rotate("a", next("a2"))).toEqual({ status: "invalid" });
+    expect(await tokens.rotate("b", next("b2"))).toEqual({ status: "invalid" });
   });
 
   test("a revoked, expired or unknown token is invalid and revokes nothing else", async () => {
