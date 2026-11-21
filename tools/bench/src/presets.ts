@@ -7,6 +7,8 @@ export interface Preset {
   readonly methods: readonly string[];
   readonly scenarios: readonly string[];
   readonly payload: string;
+  /** Hide all methods in one image (ST-53) instead of one image per method. */
+  readonly layered?: boolean;
 }
 
 export const FIXTURES = join(import.meta.dir, "..", "images");
@@ -50,5 +52,14 @@ export const presets: Record<string, Preset> = {
     }),
     scenarios: ["none", ...JPEG],
     payload: "bits:4096",
+  },
+  layered: {
+    description:
+      "ADR 9: DCT and DWT (both with Hamming(7,4)) and LSB layers in one natural image, no attack and JPEG 90/75/50",
+    covers: () => loadCovers([FIXTURES]),
+    methods: ["kochZhao:ecc=hamming74", "dwtQim:level=2,step=64,ecc=hamming74", "lsb"],
+    scenarios: ["none", ...JPEG],
+    payload: "message:64",
+    layered: true,
   },
 };

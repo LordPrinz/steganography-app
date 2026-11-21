@@ -22,6 +22,7 @@
     "native:sanitize": "bun packages/native/build.ts --sanitize",
     "native:bench": "bun packages/native/bench/color.bench.ts",
     "bench": "bun tools/bench/src/cli.ts",
+    "bench:layered-order": "bun tools/bench/src/layered-order.ts",
     "native:format": "pipx run clang-format==19.1.7 -i packages/native/c/*.c packages/native/c/*.h packages/native/c/test/*.c",
     "check": "biome check .",
     "check:fix": "biome check --write .",

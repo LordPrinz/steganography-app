@@ -69,6 +69,16 @@ default survives JPEG quality 75, and quality 50 with Hamming(7,4). Embedding ch
 extraction reads it and retries with a larger margin when rounding or clipping spoils it, so the round
 trip is exact. See ADR 7.
 
+### Layered embedding
+
+`hideLayered(image, layers)` hides one message per method in the same image: DCT first, DWT second, LSB
+last, whatever order the caller lists them in. Each layer embeds its own frame through the unchanged
+codec, so `reveal(image, method)` and `measure` read one layer at a time, and `capacityLayered` reports
+each method's own capacity (a full set of layers can still fail the verification pass). DWT does not survive a later DCT pass and LSB does not survive any later
+method, so the order is fixed by measurements. A message that does not fit throws `CapacityExceededError`
+with the layer index; a layer that does not reveal after embedding throws `LayerConflictError`.
+Two layers cannot use the same method. See ADR 9.
+
 Engine source and tests stay free of I/O. Experiments that need image files or attacks live in the bench CLI (`tools/bench`), which depends on engine, `image-io` and `contracts`; its fixtures are in `tools/bench/images`.
 
 ### Decoding after resizing

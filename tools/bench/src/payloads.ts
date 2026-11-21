@@ -1,4 +1,11 @@
-import { ber, type ConfiguredMethod, hide, measure, type RgbaImage } from "@stego/engine";
+import {
+  ber,
+  type ConfiguredMethod,
+  hide,
+  hideLayered,
+  measure,
+  type RgbaImage,
+} from "@stego/engine";
 
 /** The embedded image of one cover and method, and how to score an attacked copy of it. */
 export interface Embedded {
@@ -6,15 +13,24 @@ export interface Embedded {
   evaluate(attacked: RgbaImage): { success: boolean; ber: number };
 }
 
+/** One image holding a message per method, and how to score an attacked copy of it per layer. */
+export interface EmbeddedLayers {
+  readonly stego: RgbaImage;
+  /** One result per method, in the order the methods were given. */
+  evaluate(attacked: RgbaImage): { success: boolean; ber: number }[];
+}
+
 export interface Payload {
   /** Throws `CapacityExceededError` when the payload does not fit `cover`. */
   embed(cover: RgbaImage, method: ConfiguredMethod): Embedded;
+  /** Only the framed `message` payload can be layered: raw bits carry no frame to reveal. */
+  embedLayers?(cover: RgbaImage, methods: readonly ConfiguredMethod[]): EmbeddedLayers;
 }
 
-/** Printable ASCII text of `bytes` bytes, the same for every run. */
-function text(bytes: number): string {
+/** Printable ASCII text of `bytes` bytes, the same for every run; `shift` makes another text. */
+function text(bytes: number, shift = 0): string {
   return Array.from({ length: bytes }, (_, i) =>
-    String.fromCharCode(97 + ((i * 7 + (i >> 3)) % 26)),
+    String.fromCharCode(97 + ((i * 7 + (i >> 3) + shift) % 26)),
   ).join("");
 }
 
@@ -31,6 +47,19 @@ function message(bytes: number): Payload {
         evaluate(attacked) {
           const result = measure(attacked, secret, method);
           return { success: result.ok, ber: result.ber };
+        },
+      };
+    },
+    embedLayers(cover, methods) {
+      const secrets = methods.map((_, layer) => text(bytes, layer));
+      const layers = methods.map((method, layer) => ({ method, message: secrets[layer] ?? "" }));
+      return {
+        stego: hideLayered(cover, layers),
+        evaluate(attacked) {
+          return layers.map(({ method, message }) => {
+            const result = measure(attacked, message, method);
+            return { success: result.ok, ber: result.ber };
+          });
         },
       };
     },

@@ -31,12 +31,15 @@ export type MeasureResult =
 export class CapacityExceededError extends Error {
   readonly needed: number;
   readonly available: number;
+  /** Index of the layer in the `hideLayered` call that did not fit; unset for a plain `hide`. */
+  readonly layer: number | undefined;
 
-  constructor(needed: number, available: number) {
+  constructor(needed: number, available: number, layer?: number) {
     super("Message does not fit in the image");
     this.name = "CapacityExceededError";
     this.needed = needed;
     this.available = available;
+    this.layer = layer;
   }
 }
 
