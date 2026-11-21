@@ -21,10 +21,12 @@ counted, and what happens when a layer fails.
   with its own method id, so `reveal(image, method)` and `measure(...)` work per layer unchanged. No
   composite `ConfiguredMethod` (its single frame would force one message) and no change to the
   `ConfiguredMethod` interface or to ADR 5.
-- **Capacity: independent per layer.** `capacityLayered(width, height, methods)` returns what
+- **Capacity: each method reports its own.** `capacityLayered(width, height, methods)` returns what
   `capacity` returns for each method, in the given order. Layers do not share bit positions (each is
-  a different domain, and LSB starts at pixel 0), so nothing is subtracted. The tests fill all three
-  layers to capacity and every one still reveals.
+  a different domain), so nothing is subtracted, but that is not a guarantee: the layers disturb each
+  other, and a full set of layers can still fail the verification pass with `LayerConflictError`. The
+  tests fill all three layers to capacity on natural images with the preset's parameters and every
+  one reveals.
 - **Failures:**
   - A message that does not fit its method throws `CapacityExceededError` with a new `layer` field,
     the index in the caller's list. It is unset for a plain `hide`.
@@ -41,45 +43,65 @@ counted, and what happens when a layer fails.
 
 ## Spike
 
-Procedure: five images (the four natural `kodim` fixtures at 384 x 256 plus one generated 512 x 512),
-a 64-byte message per layer, all six orders of the three methods, each layer measured with `measure`
-after no attack, JPEG 90 and JPEG 75. Orders were embedded with sequential `hide` calls in a
-throwaway script. Apple M3 Max, Bun 1.4.4. Every figure is a mean over the five images; "exact" counts
-images where the frame revealed cleanly.
+Reproduce with `bun run bench:layered-order` (64-byte messages) and `bun run bench:layered-order 0.95`
+(each layer filled to 95% of its capacity, capped at 4000 bytes). The script embeds every order of the
+three methods with plain `hide` calls, not `hideLayered`, which fixes the order. Images: the four
+natural `kodim` fixtures (384 x 256) plus one generated 512 x 512. Each cell is the mean BER over the
+five images after no attack, JPEG 90 and JPEG 75, with the number of images whose frame revealed
+exactly. DWT is LL, level 2, step 64 and DCT is the default; LSB is one bit per channel. Apple M3 Max,
+Bun 1.4.4. All six orders were measured.
 
-LSB loses to any method that runs after it, in every parameter set: BER 0.51 to 0.57, 0 of 5 exact
-without an attack. That fixes LSB last. The remaining question is DCT against DWT (DWT LL level 2,
-step 32, and the rest below with LSB last):
+64-byte messages:
 
-| order         | PSNR dB | DCT none / JPEG 75 BER | DWT none | DWT JPEG 90 | DWT JPEG 75 (exact) |
-| ------------- | ------- | ---------------------- | -------- | ----------- | ------------------- |
-| DCT, DWT, LSB | 39.29   | 0.0000 / 0.0000        | 0.0000   | 0.0000      | 0.0031 (3/5)        |
-| DWT, DCT, LSB | 39.29   | 0.0000 / 0.0000        | 0.0000   | 0.0016      | 0.0043 (2/5)        |
+| order         | PSNR dB | layer | none         | JPEG 90      | JPEG 75      |
+| ------------- | ------- | ----- | ------------ | ------------ | ------------ |
+| DWT, DCT, LSB | 38.65   | DWT   | 0.0000 (5/5) | 0.0000 (5/5) | 0.0012 (3/5) |
+| DCT, DWT, LSB | 38.65   | DWT   | 0.0000 (5/5) | 0.0000 (5/5) | 0.0012 (3/5) |
+| LSB, DCT, DWT | 38.63   | DWT   | 0.0000 (5/5) | 0.0000 (5/5) | 0.0008 (4/5) |
+| DCT, LSB, DWT | 38.62   | DWT   | 0.0000 (5/5) | 0.0000 (5/5) | 0.0008 (4/5) |
+| DWT, LSB, DCT | 38.63   | DWT   | 0.0000 (5/5) | 0.0000 (5/5) | 0.0012 (3/5) |
+| LSB, DWT, DCT | 38.63   | DWT   | 0.0000 (5/5) | 0.0004 (4/5) | 0.0023 (3/5) |
 
-DWT at level 1, step 32 shows the effect more strongly: with DWT first, a later DCT pass destroys it
-(BER 0.42 without an attack, 0 of 5 exact); with DCT first it is exact without an attack and JPEG 75
-gives BER 0.034. DCT is not hurt by a later DWT pass in any run. The reason is the size of the
-perturbation: DCT moves a block's coefficients by tens of units, which is a large fraction of a DWT
-step, while a DWT step of 32 to 64 on a coarse band moves each DCT coefficient far less than the
-margin P = 40.
+The DCT layer is exact in every run of every order (BER 0 after all three attacks). The LSB layer is
+exact without an attack only when it is embedded last (5/5, BER 0.0000); in the four orders where a
+method runs after it, BER is 0.51 to 0.56 and 0 of 5 are exact. LSB is first or second in four of the
+six orders, so this alone fixes LSB last and leaves two orders: DCT, DWT, LSB and DWT, DCT, LSB. PSNR
+differs by at most 0.03 dB between orders (38.62 to 38.65), so it does not decide anything.
 
-Load matters too. With each layer at 95% of its capacity (capped at 4000 bytes), DCT, DWT, LSB is
-still exact without an attack on all five images, while DWT, DCT, LSB reveals the DWT layer on only
-one of five (BER 0.0071 at step 32, 0.0030 at step 64).
+At 64 bytes the two remaining orders are equal for step 64 (JPEG 75: 0.0012, 3/5 in both). For DWT step
+32 the difference (JPEG 75 BER 0.0031 with 3/5 exact against 0.0039 with 2/5) is within noise on five
+images. The decision therefore rests on two other cases.
 
-DWT parameters, order DCT, DWT, LSB:
+Level 1, step 32, 64-byte messages. DWT first, then DCT, loses the DWT layer even without an attack:
 
-| DWT band, level, step | PSNR dB | DWT JPEG 90 | DWT JPEG 75 (exact) |
-| --------------------- | ------- | ----------- | ------------------- |
-| LL, 2, 32             | 39.29   | 0.0000      | 0.0031 (3/5)        |
-| LL, 2, 64             | 38.62   | 0.0000      | 0.0008 (4/5)        |
-| LL, 1, 32             | 39.30   | 0.0020      | 0.0344 (0/5)        |
+| order         | PSNR dB | DWT none     | DWT JPEG 90  | DWT JPEG 75  |
+| ------------- | ------- | ------------ | ------------ | ------------ |
+| DWT, DCT, LSB | 39.35   | 0.4078 (0/5) | 0.3391 (0/5) | 0.3734 (0/5) |
+| DCT, DWT, LSB | 39.34   | 0.0000 (5/5) | 0.0012 (3/5) | 0.0305 (0/5) |
 
-Level 2 beats level 1 because the coefficient is averaged over 4 x 4 pixels and moves less under the
-DCT layer's changes. Step 64 costs 0.7 dB and survives more. With Hamming(7,4) around both DCT and DWT
-(`bun run bench --preset layered`, four natural images, 64-byte messages) every DCT and DWT layer
-reveals exactly after JPEG 90, 75 and 50 (16 of 16 each), mean PSNR is 35.5 dB, and the LSB layer is
-exact without an attack only (BER about 0.5 after any JPEG).
+Each layer filled to 95% of capacity, step 64 (PSNR falls to about 32 dB at this load):
+
+| order         | PSNR dB | DWT none     | DWT JPEG 90  | DWT JPEG 75  |
+| ------------- | ------- | ------------ | ------------ | ------------ |
+| DWT, DCT, LSB | 32.00   | 0.0029 (1/5) | 0.0056 (1/5) | 0.0070 (1/5) |
+| DCT, DWT, LSB | 32.01   | 0.0000 (5/5) | 0.0011 (2/5) | 0.0022 (1/5) |
+| LSB, DCT, DWT | 32.01   | 0.0000 (5/5) | 0.0011 (2/5) | 0.0023 (1/5) |
+| DWT, LSB, DCT | 31.98   | 0.0030 (2/5) | 0.0057 (1/5) | 0.0072 (1/5) |
+| LSB, DWT, DCT | 31.98   | 0.0029 (2/5) | 0.0061 (1/5) | 0.0074 (1/5) |
+
+(DCT, LSB, DWT matches DCT, DWT, LSB.) Whenever DCT runs after DWT, a full DWT layer is not exact even
+without an attack; when DWT runs after DCT it is. DCT is exact in every run at this load too. So DCT
+goes before DWT because a later DCT pass moves the DWT coefficients (a DCT change is a large part of a
+DWT step) and a later DWT pass does not move DCT coefficients past the margin P = 40.
+
+DWT parameters, order DCT, DWT, LSB, 64-byte messages: LL level 2 step 32 gives JPEG 75 BER 0.0031
+(3/5), LL level 2 step 64 gives 0.0012 (3/5) at 0.7 dB lower PSNR, and LL level 1 step 32 gives 0.0305
+(0/5), so level 2 is used. Step 32 against 64 is also within noise at 64 bytes; at 95% load step 32
+leaves the DWT layer inexact without an attack on one of five images (4/5) where step 64 keeps 5/5,
+which is why the preset uses 64. With Hamming(7,4) around both DCT and DWT (`bun run bench --preset
+layered`, four natural images, 64-byte messages) every DCT and DWT layer reveals exactly after JPEG
+90, 75 and 50 (16 of 16 each), mean PSNR is 35.5 dB, and the LSB layer is exact without an attack
+only (BER about 0.5 after any JPEG).
 
 ## Consequences
 

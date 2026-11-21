@@ -32,7 +32,7 @@ const EMBED_ORDER: Record<MethodId, number> = {
   [MethodId.Lsb]: 2,
 };
 
-/** Message bytes each of `methods` can hold on its own, in the given order (see `capacity`). */
+/** Message bytes each of `methods` reports as its own capacity, in the given order (see `capacity`). */
 export function capacityLayered(
   width: number,
   height: number,
@@ -44,7 +44,8 @@ export function capacityLayered(
 /**
  * Hides every layer in one image. Layers are embedded in a fixed order, whatever order they are
  * given in, and each one embeds its own frame, so `reveal(result, layer.method)` reads it back.
- * Capacities are independent: each layer holds what `capacity` reports for its method.
+ * Each layer is checked against its own method's `capacity`; layers do not share bit positions, but
+ * they disturb each other, so a message that fits can still fail the final check.
  *
  * Throws `RangeError` for two layers with the same method id (a reveal could not tell them apart),
  * `CapacityExceededError` with `layer` set when a message does not fit its method, and

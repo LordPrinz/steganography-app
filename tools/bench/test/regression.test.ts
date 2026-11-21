@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { capacity, hideLayered, reveal } from "@stego/engine";
 import { parseCli, resolvePlan } from "../src/args.ts";
+import { loadCovers } from "../src/covers.ts";
+import { parseMethod } from "../src/methods.ts";
+import { FIXTURES, presets } from "../src/presets.ts";
 import { type BenchRow, runBench } from "../src/run.ts";
 
 /** Mean BER over the images of the method with this spec under one attack. Throws if none match. */
@@ -144,5 +148,19 @@ describe("layered embedding (ADR 9)", () => {
 
   test("a payload without a frame cannot be layered", async () => {
     await expect(run(["--preset", "layered", "--payload", "fill"])).rejects.toThrow(/layered/);
+  });
+
+  test("every layer filled to its capacity reveals on each natural fixture", async () => {
+    const methods = (presets.layered?.methods ?? []).map((spec) => parseMethod(spec).method);
+    for (const { name, image } of await loadCovers([FIXTURES])) {
+      const layers = methods.map((method) => ({
+        method,
+        message: "q".repeat(capacity(image.width, image.height, method)),
+      }));
+      const stego = hideLayered(image, layers);
+      for (const { method, message } of layers) {
+        expect(reveal(stego, method), name).toEqual({ ok: true, message });
+      }
+    }
   });
 });
