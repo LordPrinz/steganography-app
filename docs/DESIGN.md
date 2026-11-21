@@ -208,6 +208,36 @@ each kernel with a naive TS oracle, and an ASan/UBSan harness checks memory safe
 - Gallery: `GET /api/v1/images` pages newest first with an opaque keyset cursor on `(created_at, id)`,
   backed by `images_user_gallery_idx`. Another user's image is a 404, never a 403. Deleting removes the
   object from storage first, then the row, so a failed delete can be retried.
+- Operations (`POST /api/v1/operations/encode`, `POST /api/v1/operations/decode`,
+  `GET /api/v1/operations/:id`):
+  - A request names a method with its parameters and an optional error-correcting code (repetition or
+    Hamming(7,4)). Each method has a zod schema in `@stego/contracts` that fills in defaults and checks the
+    ranges, and the engine's `createMethod` registry builds the method. Encode takes `layers` (exactly one
+    until layered embedding exists); decode takes one method or `"auto"`, which tries every method with its
+    default parameters and no error correction.
+  - The source image must be the user's own (404 `image_not_found` otherwise). For encode the message is
+    checked against the capacity before anything is queued: 422 `message_too_large` with `needed` and
+    `available` in bytes (the message itself is never echoed).
+  - The API stores the message in Redis first, then inserts the operation and its job in one transaction,
+    then calls `notify()`. If the insert fails or the user is over the cap, the message is deleted at once.
+    The answer is 202 with the operation id and a `Location` header.
+  - Limits per user: 120 requests per hour (Redis), and at most 5 queued or running operations (counted in
+    Postgres under the same per-user row lock as the image quota, so concurrent requests cannot overshoot;
+    429 `too_many_operations`).
+  - The worker loads the source through an owner-scoped lookup, runs the codec, and for encode stores the
+    stego PNG under the user's prefix as a new `images` row of kind `stego` (same quota and 32 MiB ceiling as
+    uploads), then records it in `operations.result_image_id`. Permanent problems (`source_missing`,
+    `invalid_image`, `invalid_params`, `capacity_exceeded`, `image_too_large`, `quota_exceeded`) fail the job
+    without retries.
+  - `operations.result` holds metrics only. Encode: message bytes, capacity bytes, PSNR and time; PSNR is
+    `null` when the stego image is identical to the source (infinite PSNR has no JSON form). Decode: one
+    attempt per method with its outcome (`found`, `no-message`, `corrupted`, `method-mismatch`), message
+    bytes, capacity and time, plus the first method that found a message.
+  - `GET` is scoped to the owner, and another user's operation is a 404. It adds a presigned URL for the
+    result image and, for a succeeded decode, the revealed message while its Redis key lives. It answers with
+    `Cache-Control: no-store`. Succeeded and failed operations never change, so their stored fields are
+    cached in Redis for 10 minutes (cache-aside, with the owner's id inside the entry); the URL and the
+    revealed message are never cached. If Redis is down the read falls back to Postgres.
 - The hidden message is **never** stored in the database.
 
 ### Bun built-ins over libraries

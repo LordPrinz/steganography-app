@@ -5,3 +5,4 @@ export * from "./health.ts";
 export * from "./images.ts";
 export * from "./jobs.ts";
 export * from "./methods.ts";
+export * from "./operations.ts";

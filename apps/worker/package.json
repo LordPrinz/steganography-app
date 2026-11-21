@@ -15,6 +15,7 @@
     "@stego/engine": "workspace:*",
     "@stego/image-io": "workspace:*",
     "@stego/kv": "workspace:*",
+    "@stego/storage": "workspace:*",
     "zod": "4.6.7"
   }
 }

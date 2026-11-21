@@ -1,5 +1,10 @@
-import type { ImageRepository, RefreshTokenRepository, UserRepository } from "@stego/db";
-import type { KeyValueStore } from "@stego/kv";
+import type {
+  ImageRepository,
+  OperationRepository,
+  RefreshTokenRepository,
+  UserRepository,
+} from "@stego/db";
+import { createMessageHandoff, type KeyValueStore, type WakePublisher } from "@stego/kv";
 import type { ObjectStore } from "@stego/storage";
 import { type ConcurrencyLimit, createConcurrencyLimit } from "./lib/concurrency-limit.ts";
 import { requireOrigin } from "./lib/csrf.ts";
@@ -10,6 +15,8 @@ import { createAccessTokens } from "./modules/auth/tokens.ts";
 import { healthRoutes } from "./modules/health/routes.ts";
 import { imageRoutes, MAX_REQUEST_BYTES } from "./modules/images/routes.ts";
 import { createImageService, type ImageLimits } from "./modules/images/service.ts";
+import { operationRoutes } from "./modules/operations/routes.ts";
+import { createOperationService } from "./modules/operations/service.ts";
 
 const ACCESS_TTL_SECONDS = 15 * 60;
 const REFRESH_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -19,9 +26,12 @@ const DECODE_SLOTS = 2;
 export interface ServerDeps {
   port: number;
   kv: KeyValueStore;
+  /** Wakes the worker after a job was enqueued. */
+  wake: WakePublisher;
   storage: Pick<ObjectStore, "ping" | "put" | "delete" | "presignGet">;
   users: UserRepository;
   images: ImageRepository;
+  operations: OperationRepository;
   refreshTokens: RefreshTokenRepository;
   jwtSecret: string;
   /** The web app's origin: the only one allowed to make state-changing requests. */
@@ -37,9 +47,11 @@ export interface ServerDeps {
 export function createServer({
   port,
   kv,
+  wake,
   storage,
   users,
   images,
+  operations,
   refreshTokens,
   jwtSecret,
   appOrigin,
@@ -64,6 +76,15 @@ export function createServer({
     limits: imageLimits,
   });
 
+  const operationService = createOperationService({
+    operations,
+    images,
+    imageUrls: imageService,
+    handoff: createMessageHandoff(kv),
+    wake,
+    kv,
+  });
+
   return Bun.serve({
     port,
     // Bun applies one body limit to the whole server, so it is sized for uploads. JSON bodies are held to
@@ -84,6 +105,7 @@ export function createServer({
           }),
         ),
         ...mount(API_PREFIX, imageRoutes({ images: imageService, kv, requireUser })),
+        ...mount(API_PREFIX, operationRoutes({ operations: operationService, kv, requireUser })),
       },
       appOrigin,
     ),

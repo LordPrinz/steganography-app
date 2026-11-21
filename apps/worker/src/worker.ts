@@ -31,7 +31,16 @@ type Outcome =
   | { ok: false; error: unknown };
 
 // Repeating these on the same input cannot help.
-const NO_RETRY = new Set(["timeout", "message_expired"]);
+const NO_RETRY = new Set([
+  "timeout",
+  "message_expired",
+  "source_missing",
+  "invalid_image",
+  "invalid_params",
+  "capacity_exceeded",
+  "image_too_large",
+  "quota_exceeded",
+]);
 
 export function createWorker({
   queue,
