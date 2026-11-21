@@ -74,6 +74,53 @@ const symbols = {
     args: ["buffer", "buffer_length", "u32", "u32", "u32", "buffer", "buffer_length"],
     returns: "i32",
   },
+  stego_blur_separable: {
+    args: [
+      "buffer",
+      "buffer_length",
+      "u32",
+      "u32",
+      "buffer",
+      "buffer_length",
+      "buffer",
+      "buffer_length",
+      "buffer",
+      "buffer_length",
+    ],
+    returns: "i32",
+  },
+  stego_luma_mse: {
+    args: [
+      "buffer",
+      "buffer_length",
+      "buffer",
+      "buffer_length",
+      "u32",
+      "u32",
+      "buffer",
+      "buffer_length",
+    ],
+    returns: "i32",
+  },
+  stego_luma_ssim: {
+    args: [
+      "buffer",
+      "buffer_length",
+      "buffer",
+      "buffer_length",
+      "u32",
+      "u32",
+      "buffer",
+      "buffer_length",
+      "buffer",
+      "buffer_length",
+    ],
+    returns: "i32",
+  },
+  stego_bit_errors: {
+    args: ["buffer", "buffer_length", "buffer", "buffer_length", "buffer", "buffer_length"],
+    returns: "i32",
+  },
 } as const;
 
 type NativeSymbols = ReturnType<typeof dlopen<typeof symbols>>["symbols"];

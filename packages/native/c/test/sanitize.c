@@ -229,6 +229,150 @@ static void lsb_invalid(void) {
   }
 }
 
+static void blur_case(uint32_t w, uint32_t h, uint64_t taps) {
+  uint64_t n = (uint64_t)w * h, sb = (uint64_t)w * 3 * sizeof(double), kb = taps * sizeof(double);
+  uint8_t *rgba = alloc(n * 4), *out = alloc(n * 4);
+  double *kernel = alloc(kb), *scratch = alloc(sb);
+  for (uint64_t i = 0; i < n * 4; i++)
+    rgba[i] = next_byte();
+  for (uint64_t i = 0; i < taps; i++)
+    kernel[i] = 1.0 / (double)taps;
+
+  EXPECT(stego_blur_separable(rgba, n * 4, w, h, kernel, kb, scratch, sb, out, n * 4) == STEGO_OK);
+  for (uint64_t i = 3; i < n * 4; i += 4)
+    EXPECT(out[i] == rgba[i]);
+
+  /* A one-tap identity kernel returns the input. */
+  kernel[0] = 1.0;
+  EXPECT(stego_blur_separable(rgba, n * 4, w, h, kernel, sizeof(double), scratch, sb, out, n * 4) ==
+         STEGO_OK);
+  EXPECT(memcmp(rgba, out, n * 4) == 0);
+
+  /* Weights that overflow or are NaN still clamp before the integer conversion. */
+  kernel[0] = INFINITY;
+  EXPECT(stego_blur_separable(rgba, n * 4, w, h, kernel, sizeof(double), scratch, sb, out, n * 4) ==
+         STEGO_OK);
+  kernel[0] = NAN;
+  EXPECT(stego_blur_separable(rgba, n * 4, w, h, kernel, sizeof(double), scratch, sb, out, n * 4) ==
+         STEGO_OK);
+
+  /* Buffers one byte off are rejected before any access. */
+  EXPECT(stego_blur_separable(rgba, n * 4 - 1, w, h, kernel, kb, scratch, sb, out, n * 4) ==
+         STEGO_E_LENGTH);
+  EXPECT(stego_blur_separable(rgba, n * 4, w, h, kernel, kb, scratch, sb - 1, out, n * 4) ==
+         STEGO_E_LENGTH);
+  EXPECT(stego_blur_separable(rgba, n * 4, w, h, kernel, kb, scratch, sb, out, n * 4 + 1) ==
+         STEGO_E_LENGTH);
+  EXPECT(stego_blur_separable(rgba, n * 4, w, h, kernel, kb - 1, scratch, sb, out, n * 4) ==
+         STEGO_E_LENGTH);
+
+  free(rgba);
+  free(out);
+  free(kernel);
+  free(scratch);
+}
+
+static void blur_invalid(void) {
+  uint8_t rgba[4] = {0}, out[4] = {0};
+  double kernel[3] = {0.25, 0.5, 0.25}, scratch[3] = {0};
+  uint64_t kb = sizeof kernel, sb = sizeof scratch;
+
+  EXPECT(stego_blur_separable(NULL, 4, 1, 1, kernel, kb, scratch, sb, out, 4) == STEGO_E_NULL);
+  EXPECT(stego_blur_separable(rgba, 4, 1, 1, NULL, kb, scratch, sb, out, 4) == STEGO_E_NULL);
+  EXPECT(stego_blur_separable(rgba, 4, 1, 1, kernel, kb, NULL, sb, out, 4) == STEGO_E_NULL);
+  EXPECT(stego_blur_separable(rgba, 4, 1, 1, kernel, kb, scratch, sb, NULL, 4) == STEGO_E_NULL);
+
+  /* Even tap counts (including none) and kernels longer than the limit. */
+  EXPECT(stego_blur_separable(rgba, 4, 1, 1, kernel, 0, scratch, sb, out, 4) == STEGO_E_ARGUMENT);
+  EXPECT(stego_blur_separable(rgba, 4, 1, 1, kernel, 2 * sizeof(double), scratch, sb, out, 4) ==
+         STEGO_E_ARGUMENT);
+  EXPECT(stego_blur_separable(rgba, 4, 1, 1, kernel, (STEGO_BLUR_MAX_TAPS + 2) * sizeof(double),
+                              scratch, sb, out, 4) == STEGO_E_ARGUMENT);
+
+  static const uint32_t bad[][2] = {{0, 1}, {1, 0}, {STEGO_MAX_SIDE + 1, 1}, {65536, 65536}};
+  for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++)
+    EXPECT(stego_blur_separable(rgba, 4, bad[i][0], bad[i][1], kernel, kb, scratch, sb, out, 4) ==
+           STEGO_E_DIMENSIONS);
+}
+
+static void metrics_case(uint32_t w, uint32_t h) {
+  uint64_t n = (uint64_t)w * h;
+  uint8_t *a = alloc(n * 4), *b = alloc(n * 4);
+  uint64_t sb = (uint64_t)w * STEGO_SSIM_SCRATCH_ROWS * sizeof(double);
+  double *out = alloc(sizeof(double)), *scratch = alloc(sb);
+  uint64_t *errors = alloc(sizeof(uint64_t));
+  for (uint64_t i = 0; i < n * 4; i++)
+    a[i] = next_byte();
+  memcpy(b, a, n * 4);
+
+  EXPECT(stego_luma_mse(a, n * 4, b, n * 4, w, h, out, sizeof(double)) == STEGO_OK);
+  EXPECT(*out == 0.0);
+  int32_t expected =
+      w >= STEGO_SSIM_MIN_SIDE && h >= STEGO_SSIM_MIN_SIDE ? STEGO_OK : STEGO_E_DIMENSIONS;
+  EXPECT(stego_luma_ssim(a, n * 4, b, n * 4, w, h, scratch, sb, out, sizeof(double)) == expected);
+  if (expected == STEGO_OK) EXPECT(*out == 1.0);
+
+  /* Treated as bit arrays, the two buffers differ exactly where the low bit was flipped. */
+  for (uint64_t i = 0; i < n * 4; i += 3)
+    b[i] ^= 1;
+  EXPECT(stego_bit_errors(a, n * 4, b, n * 4, errors, sizeof(uint64_t)) == STEGO_OK);
+  EXPECT(*errors == (n * 4 + 2) / 3);
+  EXPECT(stego_luma_mse(a, n * 4, b, n * 4, w, h, out, sizeof(double)) == STEGO_OK);
+  EXPECT(*out > 0.0);
+  if (expected == STEGO_OK) {
+    EXPECT(stego_luma_ssim(a, n * 4, b, n * 4, w, h, scratch, sb, out, sizeof(double)) == STEGO_OK);
+    EXPECT(*out < 1.0);
+  }
+
+  /* Buffers one byte off are rejected before any access. */
+  EXPECT(stego_luma_mse(a, n * 4 - 1, b, n * 4, w, h, out, sizeof(double)) == STEGO_E_LENGTH);
+  EXPECT(stego_luma_ssim(a, n * 4, b, n * 4 + 1, w, h, scratch, sb, out, sizeof(double)) ==
+         STEGO_E_LENGTH);
+  EXPECT(stego_luma_ssim(a, n * 4, b, n * 4, w, h, scratch, sb, out, sizeof(double) - 1) ==
+         STEGO_E_LENGTH);
+  EXPECT(stego_bit_errors(a, n * 4, b, n * 4 - 1, errors, sizeof(uint64_t)) == STEGO_E_LENGTH);
+  if (expected == STEGO_OK) {
+    EXPECT(stego_luma_ssim(a, n * 4, b, n * 4, w, h, scratch, sb - 1, out, sizeof(double)) ==
+           STEGO_E_LENGTH);
+    EXPECT(stego_luma_ssim(a, n * 4, b, n * 4, w, h, scratch, sb + 1, out, sizeof(double)) ==
+           STEGO_E_LENGTH);
+  }
+
+  free(a);
+  free(b);
+  free(out);
+  free(scratch);
+  free(errors);
+}
+
+static void metrics_invalid(void) {
+  uint8_t a[4] = {0};
+  double out = 0, scratch[STEGO_SSIM_SCRATCH_ROWS] = {0};
+  uint64_t errors = 0;
+
+  EXPECT(stego_luma_mse(NULL, 4, a, 4, 1, 1, &out, sizeof out) == STEGO_E_NULL);
+  EXPECT(stego_luma_mse(a, 4, NULL, 4, 1, 1, &out, sizeof out) == STEGO_E_NULL);
+  EXPECT(stego_luma_mse(a, 4, a, 4, 1, 1, NULL, sizeof out) == STEGO_E_NULL);
+  EXPECT(stego_luma_ssim(NULL, 4, a, 4, 1, 1, scratch, sizeof scratch, &out, sizeof out) ==
+         STEGO_E_NULL);
+  EXPECT(stego_luma_ssim(a, 4, a, 4, 1, 1, scratch, sizeof scratch, NULL, sizeof out) ==
+         STEGO_E_NULL);
+  EXPECT(stego_luma_ssim(a, 4, a, 4, 1, 1, NULL, sizeof scratch, &out, sizeof out) == STEGO_E_NULL);
+  EXPECT(stego_bit_errors(NULL, 4, a, 4, &errors, sizeof errors) == STEGO_E_NULL);
+  EXPECT(stego_bit_errors(a, 4, a, 4, NULL, sizeof errors) == STEGO_E_NULL);
+  /* Empty bit arrays may come without a pointer. */
+  EXPECT(stego_bit_errors(NULL, 0, NULL, 0, &errors, sizeof errors) == STEGO_OK);
+  EXPECT(errors == 0);
+
+  static const uint32_t bad[][2] = {{0, 1}, {1, 0}, {STEGO_MAX_SIDE + 1, 1}, {65536, 65536}};
+  for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+    EXPECT(stego_luma_mse(a, 4, a, 4, bad[i][0], bad[i][1], &out, sizeof out) ==
+           STEGO_E_DIMENSIONS);
+    EXPECT(stego_luma_ssim(a, 4, a, 4, bad[i][0], bad[i][1], scratch, sizeof scratch, &out,
+                           sizeof out) == STEGO_E_DIMENSIONS);
+  }
+}
+
 int main(void) {
   EXPECT(stego_abi_version() == STEGO_ABI_VERSION);
 
@@ -250,6 +394,20 @@ int main(void) {
     lsb_case(37, 23, k);
   }
   lsb_invalid();
+
+  for (size_t i = 0; i < sizeof shapes / sizeof shapes[0]; i++)
+    blur_case(shapes[i][0], shapes[i][1], 3);
+  /* Kernels much wider than the image, up to the longest allowed. */
+  blur_case(1, 1, STEGO_BLUR_MAX_TAPS);
+  blur_case(3, 5, 61);
+  blur_case(37, 23, STEGO_BLUR_MAX_TAPS);
+  blur_invalid();
+
+  for (size_t i = 0; i < sizeof shapes / sizeof shapes[0]; i++)
+    metrics_case(shapes[i][0], shapes[i][1]);
+  metrics_case(11, 11);
+  metrics_case(11, 40);
+  metrics_invalid();
 
   if (failures) {
     fprintf(stderr, "sanitize: %d check(s) failed\n", failures);

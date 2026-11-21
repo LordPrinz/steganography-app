@@ -1,4 +1,5 @@
 import { fromBits, toBits } from "./bits.ts";
+import { ber as bitErrorRate } from "./metrics.ts";
 import {
   decodeFrameHeader,
   encodeFrame,
@@ -121,13 +122,10 @@ export function measure(
   const expected = toBits(frameFor(attacked.width, attacked.height, expectedMessage, method));
   const actual = method.extract(attacked, expected.length);
   const payloadEnd = expected.length - CRC_BITS;
-
-  let errors = 0;
-  for (let i = HEADER_BITS; i < payloadEnd; i++) {
-    if (actual[i] !== expected[i]) errors++;
-  }
-  const payloadBits = payloadEnd - HEADER_BITS;
-  const ber = payloadBits === 0 ? 0 : errors / payloadBits;
+  const ber = bitErrorRate(
+    expected.subarray(HEADER_BITS, payloadEnd),
+    actual.subarray(HEADER_BITS, payloadEnd),
+  );
   const revealed = reveal(attacked, method);
   return revealed.ok ? { ok: true, ber } : { ok: false, error: revealed.error, ber };
 }
