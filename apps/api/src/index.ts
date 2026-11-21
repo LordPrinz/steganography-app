@@ -1,6 +1,7 @@
 import {
   createDb,
   createImageRepository,
+  createOperationRepository,
   createRefreshTokenRepository,
   createUserRepository,
 } from "@stego/db";
@@ -27,6 +28,7 @@ const server = createServer({
   storage,
   users: createUserRepository(db),
   images: createImageRepository(db),
+  operations: createOperationRepository(db),
   refreshTokens: createRefreshTokenRepository(db),
   jwtSecret: env.JWT_SECRET,
   appOrigin: env.APP_ORIGIN,

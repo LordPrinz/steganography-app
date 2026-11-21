@@ -16,4 +16,5 @@ export { type DwtQimParams, dwtQim } from "./methods/dwt-qim.ts";
 export { KOCH_ZHAO_DEFAULTS, type KochZhaoParams, kochZhao } from "./methods/koch-zhao.ts";
 export { type LsbParams, lsb } from "./methods/lsb.ts";
 export { ber, psnr, ssim } from "./metrics.ts";
+export { createMethod, type EccSelection, type MethodSelection } from "./registry.ts";
 export { type ConfiguredMethod, MethodId, type RgbaImage } from "./types.ts";

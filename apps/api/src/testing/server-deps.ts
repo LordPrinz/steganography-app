@@ -1,5 +1,6 @@
 import {
   createMemoryImageRepository,
+  createMemoryOperationRepository,
   createMemoryRefreshTokenRepository,
   createMemoryUserRepository,
 } from "@stego/db/testing";
@@ -18,6 +19,7 @@ export function testServerDeps(overrides: Partial<ServerDeps> = {}): ServerDeps 
     storage: createMemoryObjectStore(),
     users: createMemoryUserRepository(),
     images: createMemoryImageRepository(),
+    operations: createMemoryOperationRepository(),
     refreshTokens: createMemoryRefreshTokenRepository(),
     jwtSecret: TEST_JWT_SECRET,
     appOrigin: TEST_ORIGIN,
