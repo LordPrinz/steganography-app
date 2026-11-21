@@ -8,4 +8,5 @@ export type Db = SQL;
 export * from "./auth.ts";
 export * from "./images.ts";
 export * from "./jobs.ts";
+export * from "./operations.ts";
 export * from "./types.ts";

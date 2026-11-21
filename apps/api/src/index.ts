@@ -1,10 +1,11 @@
 import {
   createDb,
   createImageRepository,
+  createOperationRepository,
   createRefreshTokenRepository,
   createUserRepository,
 } from "@stego/db";
-import { createRedisStore, keepConnected } from "@stego/kv";
+import { createRedisStore, createRedisWakePublisher, keepConnected } from "@stego/kv";
 import { createS3ObjectStore } from "@stego/storage";
 import { RedisClient } from "bun";
 import { createServer } from "./app.ts";
@@ -24,9 +25,11 @@ const db = createDb(env.DATABASE_URL);
 const server = createServer({
   port: env.API_PORT,
   kv: createRedisStore(redis),
+  wake: createRedisWakePublisher(redis),
   storage,
   users: createUserRepository(db),
   images: createImageRepository(db),
+  operations: createOperationRepository(db),
   refreshTokens: createRefreshTokenRepository(db),
   jwtSecret: env.JWT_SECRET,
   appOrigin: env.APP_ORIGIN,

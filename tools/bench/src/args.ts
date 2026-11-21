@@ -17,6 +17,7 @@ Options:
   --scenario <spec>   none, or attacks joined with +, repeatable. Default: none, jpeg90, jpeg75,
                       jpeg50, resize0.5, blur1. Attacks: jpegQ, resizeSCALE, blurSIGMA
   --payload <spec>    ${PAYLOAD_NAMES.join(", ")}: message[:bytes] (default 64), fill, bits[:count]
+  --layered           hide every --method in the same image (one message each) and report per layer
   --preset <name>     a configuration from the ADRs; other options override its parts
   --csv <file>        write one row per run (image, method, params, attack, success, ber, psnr, ssim, time)
   --json <file>       the same rows as JSON
@@ -34,6 +35,7 @@ export interface CliOptions {
   readonly scenarios: readonly string[];
   readonly payload?: string;
   readonly preset?: string;
+  readonly layered: boolean;
   readonly csv?: string;
   readonly json?: string;
   readonly list: boolean;
@@ -50,6 +52,7 @@ export function parseCli(argv: readonly string[]): CliOptions {
       scenario: { type: "string", multiple: true },
       payload: { type: "string" },
       preset: { type: "string" },
+      layered: { type: "boolean", default: false },
       csv: { type: "string" },
       json: { type: "string" },
       list: { type: "boolean", default: false },
@@ -62,6 +65,7 @@ export function parseCli(argv: readonly string[]): CliOptions {
     scenarios: values.scenario ?? [],
     payload: values.payload,
     preset: values.preset,
+    layered: values.layered,
     csv: values.csv,
     json: values.json,
     list: values.list,
@@ -93,5 +97,6 @@ export async function resolvePlan(options: CliOptions): Promise<BenchPlan> {
   const payload = parsePayload(options.payload ?? preset?.payload ?? DEFAULT_PAYLOAD);
   const covers =
     options.images.length > 0 ? await loadCovers(options.images) : await preset?.covers();
-  return { covers: covers ?? [], methods, scenarios, payload };
+  const layered = options.layered || (preset?.layered ?? false);
+  return { covers: covers ?? [], methods, scenarios, payload, layered };
 }
