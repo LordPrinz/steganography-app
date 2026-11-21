@@ -11,10 +11,10 @@ import {
 } from "./service.ts";
 
 /**
- * Room for a message of MAX_MESSAGE_BYTES in the worst JSON form (every control byte escaped as six
- * characters is 384 KiB), plus the rest of the request.
+ * Room for three messages (the most layers) of MAX_MESSAGE_BYTES each in the worst JSON form (every
+ * control byte escaped as six characters is 384 KiB per message), plus the rest of the request.
  */
-export const MAX_ENCODE_BODY_BYTES = 512 * 1024;
+export const MAX_ENCODE_BODY_BYTES = 1280 * 1024;
 
 /** Maps what the service refuses to the API's errors; anything else is a 500. */
 export async function refuse<T>(call: Promise<T>): Promise<T> {
@@ -37,6 +37,7 @@ function refusal(error: unknown): unknown {
       needed: error.needed,
       available: error.available,
       ...(error.method && { method: error.method }),
+      ...(error.layer !== undefined && { layer: error.layer }),
     });
   }
   if (error instanceof ExperimentImageTooLargeError) {

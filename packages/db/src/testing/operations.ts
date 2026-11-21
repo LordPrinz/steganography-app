@@ -34,7 +34,7 @@ export function createMemoryOperationRepository(): MemoryOperationRepository {
 
     async findOwned(userId, id) {
       const row = operations.get(id);
-      return row?.user_id === userId ? { ...row, error: null } : null;
+      return row?.user_id === userId ? { ...row, error: null, failure_layer: null } : null;
     },
 
     async listPage(userId, { limit, after, filter = {} }) {
@@ -58,7 +58,7 @@ export function createMemoryOperationRepository(): MemoryOperationRepository {
       const page = rest.slice(0, limit);
       const last = rest.length > limit ? page.at(-1) : undefined;
       return {
-        operations: page.map((row) => ({ ...row, error: null })),
+        operations: page.map((row) => ({ ...row, error: null, failure_layer: null })),
         next: last ? { createdAt: last.created_at.toISOString(), id: last.id } : null,
       };
     },

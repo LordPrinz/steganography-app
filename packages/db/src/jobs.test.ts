@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import type { SQL } from "bun";
 import { backoffMs, createJobQueue, enqueueJob, JobError } from "./jobs.ts";
+import { createOperationRepository } from "./operations.ts";
 import { createTestDatabase } from "./testing/index.ts";
 import type { JobRow, OperationRow } from "./types.ts";
 
@@ -164,6 +165,68 @@ describe.skipIf(!sql)("job queue", () => {
     expect(row.finished_at).toBeInstanceOf(Date);
     const [opRow] = await db<OperationRow[]>`SELECT * FROM operations WHERE id = ${op.id}`;
     expect(opRow).toMatchObject({ status: "succeeded", result: { psnr: 51.2 } });
+  });
+
+  test("fail stores the layer of a layered failure and replaces it on the next failure", async () => {
+    const op = await newOperation();
+    const queue = createJobQueue(db, { maxAttempts: 2, backoffBaseMs: 1 });
+    await queue.enqueue(op.id);
+    const first = await queue.claim();
+    if (!first) throw new Error("expected a job");
+    await queue.fail(first, new JobError("layer_conflict", { layer: 2 }));
+    expect(await jobRow(first.id)).toMatchObject({ error: "layer_conflict", failure_layer: 2 });
+
+    await db`UPDATE jobs SET run_after = now() WHERE id = ${first.id}`;
+    const second = await queue.claim();
+    if (!second) throw new Error("expected a job");
+    await queue.fail(second, new JobError("storage_unavailable"));
+    expect(await jobRow(first.id)).toMatchObject({
+      status: "failed",
+      error: "storage_unavailable",
+      failure_layer: null,
+    });
+  });
+
+  test("a retry that succeeds clears the layer of the failed attempt", async () => {
+    const op = await newOperation();
+    const queue = createJobQueue(db, { backoffBaseMs: 1 });
+    await queue.enqueue(op.id);
+    const first = await queue.claim();
+    if (!first) throw new Error("expected a job");
+    await queue.fail(first, new JobError("layer_conflict", { layer: 1 }));
+    await db`UPDATE jobs SET run_after = now() WHERE id = ${first.id}`;
+    const second = await queue.claim();
+    if (!second) throw new Error("expected a job");
+    expect(await queue.complete(second, { ok: true })).toBe(true);
+    expect(await jobRow(first.id)).toMatchObject({
+      status: "succeeded",
+      error: null,
+      failure_layer: null,
+    });
+  });
+
+  test("a layered failure is final at once with its layer on the operation view", async () => {
+    const op = await newOperation();
+    const queue = createJobQueue(db);
+    await queue.enqueue(op.id);
+    const job = await queue.claim();
+    if (!job) throw new Error("expected a job");
+    await queue.fail(job, new JobError("capacity_exceeded", { layer: 1 }), { retry: false });
+    expect(await createOperationRepository(db).findOwned(op.user_id, op.id)).toMatchObject({
+      status: "failed",
+      error: "capacity_exceeded",
+      failure_layer: 1,
+    });
+  });
+
+  test("a failure layer outside 0 to 2 is refused by the error and the table", async () => {
+    expect(() => new JobError("layer_conflict", { layer: 3 })).toThrow(RangeError);
+    expect(() => new JobError("layer_conflict", { layer: -1 })).toThrow(RangeError);
+    const op = await newOperation();
+    await createJobQueue(db).enqueue(op.id);
+    await expect(
+      db`UPDATE jobs SET failure_layer = 3 WHERE operation_id = ${op.id}`,
+    ).rejects.toThrow();
   });
 
   test("fail requeues with exponential backoff until attempts run out", async () => {

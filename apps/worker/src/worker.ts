@@ -5,7 +5,7 @@ import type { JobContext, JobHandler, JobHandlers } from "./handlers.ts";
 export interface WorkerOptions {
   queue: Pick<JobQueue, "maxAttempts" | "claim" | "extend" | "complete" | "fail">;
   handlers: JobHandlers;
-  handoff: Pick<MessageHandoff, "getMessage" | "deleteMessage" | "putRevealed">;
+  handoff: Pick<MessageHandoff, "getMessages" | "deleteMessage" | "putRevealed">;
   /** The worker claims no job while this reports false (Redis down: jobs could not read their message). */
   ready?: () => Promise<boolean>;
   /** Sleep between polls when the queue is empty. */
@@ -38,7 +38,9 @@ const NO_RETRY = new Set([
   "invalid_image",
   "invalid_params",
   "capacity_exceeded",
+  "layer_conflict",
   "image_too_large",
+  "image_too_small",
   "quota_exceeded",
 ]);
 
@@ -84,12 +86,12 @@ export function createWorker({
     const operationId = job.operation_id;
     const context = (signal: AbortSignal): JobContext => ({
       signal,
-      async message() {
-        const message = await handoff.getMessage(operationId);
-        if (message === null) throw new JobError("message_expired");
-        return message;
+      async messages() {
+        const messages = await handoff.getMessages(operationId);
+        if (messages === null) throw new JobError("message_expired");
+        return messages;
       },
-      reveal: (message) => handoff.putRevealed(operationId, message),
+      reveal: (revealed) => handoff.putRevealed(operationId, revealed),
     });
     const abort = new AbortController();
     let renewing = false;

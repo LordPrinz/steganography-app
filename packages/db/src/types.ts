@@ -57,6 +57,8 @@ export interface JobRow {
   status: JobStatus;
   attempts: number;
   error: string | null;
+  /** Index of the layer a layered job failed on, or null. */
+  failure_layer: number | null;
   run_after: Date;
   locked_at: Date | null;
   finished_at: Date | null;

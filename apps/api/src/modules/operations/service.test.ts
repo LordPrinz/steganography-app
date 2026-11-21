@@ -46,6 +46,7 @@ function view(overrides: Partial<OperationView> = {}): OperationView {
     result: null,
     created_at: new Date("2026-11-20T10:00:00Z"),
     error: null,
+    failure_layer: null,
     ...overrides,
   };
 }
@@ -151,13 +152,12 @@ describe("message hand-off", () => {
     await expect(
       service.encode(USER, {
         imageId: IMAGE_ID,
-        message: "hello",
-        layers: [MethodSelection.parse({ id: "lsb" })] as [MethodSelection],
+        layers: [{ method: MethodSelection.parse({ id: "lsb" }), message: "hello" }],
       }),
     ).rejects.toThrow("database down");
     const [key] = keys;
     expect(key).toMatch(/^op:[0-9a-f-]{36}:message$/);
-    expect(await handoff.getMessage((key as string).split(":")[1] as string)).toBeNull();
+    expect(await handoff.getMessages((key as string).split(":")[1] as string)).toBeNull();
   });
 });
 
@@ -174,7 +174,7 @@ describe("remove", () => {
   test("drops the revealed message of a deleted operation", async () => {
     const row = view({ status: "succeeded" });
     const { service, handoff } = setup({ rows: [row] });
-    await handoff.putRevealed(row.id, "hidden text");
+    await handoff.putRevealed(row.id, { lsb: "hidden text" });
     await service.remove(USER, row.id);
     expect(await handoff.getRevealed(row.id)).toBeNull();
   });
@@ -262,16 +262,31 @@ describe("polling", () => {
     const row = view({ status: "succeeded" });
     const { service, handoff } = setup({ rows: [row] });
     expect(await service.get(USER, row.id)).toMatchObject({ revealed: null });
-    await handoff.putRevealed(row.id, "hidden text");
-    expect(await service.get(USER, row.id)).toMatchObject({ revealed: "hidden text" });
+    await handoff.putRevealed(row.id, { lsb: "hidden text" });
+    expect(await service.get(USER, row.id)).toMatchObject({ revealed: { lsb: "hidden text" } });
     expect(await service.get(OTHER, row.id)).toBeNull();
   });
 
   test("shows a revealed message only for a succeeded decode", async () => {
     const row = view({ type: "encode", status: "succeeded" });
     const { service, handoff } = setup({ rows: [row] });
-    await handoff.putRevealed(row.id, "hidden text");
+    await handoff.putRevealed(row.id, { lsb: "hidden text" });
     expect(await service.get(USER, row.id)).toMatchObject({ revealed: null });
+  });
+});
+
+describe("failed layer", () => {
+  test("is shown for a failed operation only", async () => {
+    const failed = view({ status: "failed", error: "layer_conflict", failure_layer: 2 });
+    const retrying = view({ status: "queued", error: "layer_conflict", failure_layer: 2 });
+    const { service } = setup({ rows: [failed, retrying], listed: [failed, retrying] });
+    expect(await service.get(USER, failed.id)).toMatchObject({
+      error: "layer_conflict",
+      failedLayer: 2,
+    });
+    expect(await service.get(USER, retrying.id)).toMatchObject({ error: null, failedLayer: null });
+    const page = await service.list(USER, { limit: 10 });
+    expect(page.operations.map((o) => o.failedLayer)).toEqual([2, null]);
   });
 });
 
@@ -537,8 +552,7 @@ describe("experiment", () => {
     await expect(
       service.encode(USER, {
         imageId: IMAGE_ID,
-        message: "hi",
-        layers: [MethodSelection.parse({ id: "lsb" })],
+        layers: [{ method: MethodSelection.parse({ id: "lsb" }), message: "hi" }],
       }),
     ).rejects.toThrow(SourceNotFoundError);
     await expect(service.experiment(USER, lsbB([[]]))).rejects.toThrow(SourceNotFoundError);

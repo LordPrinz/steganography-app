@@ -7,12 +7,16 @@ export interface JobContext {
    */
   signal: AbortSignal;
   /**
-   * The hidden message to embed. Throws `JobError("message_expired")` when it is gone, which fails the
-   * job without a retry. Keep it out of errors, logs and results.
+   * The hidden messages to embed, one per layer in request order (a single entry for one message).
+   * Throws `JobError("message_expired")` when they are gone, which fails the job without a retry. Keep
+   * them out of errors, logs and results.
    */
-  message(): Promise<string>;
-  /** Hands a decoded message to the user through Redis; it expires on its own and never reaches Postgres. */
-  reveal(message: string): Promise<void>;
+  messages(): Promise<string[]>;
+  /**
+   * Hands what a decode found, by method id, to the user through Redis; it expires on its own and
+   * never reaches Postgres.
+   */
+  reveal(revealed: Readonly<Record<string, string>>): Promise<void>;
 }
 
 /**

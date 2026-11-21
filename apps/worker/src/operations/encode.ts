@@ -1,22 +1,17 @@
 import {
   EncodeParams,
   type EncodeResult,
+  EXPERIMENT_MIN_SIDE,
   MAX_IMAGES_PER_USER,
   MAX_PNG_BYTES,
   MAX_USER_IMAGE_BYTES,
 } from "@stego/contracts";
 import { type ImageRepository, JobError, type OperationRepository } from "@stego/db";
-import {
-  CapacityExceededError,
-  capacity,
-  createMethod,
-  hide,
-  MAX_MESSAGE_BYTES,
-  psnr,
-} from "@stego/engine";
+import { capacityLayered, MAX_MESSAGE_BYTES, psnr, ssim } from "@stego/engine";
 import { encodePng } from "@stego/image-io";
 import { newImageKey, type ObjectStore } from "@stego/storage";
 import type { JobHandler } from "../handlers.ts";
+import { buildMethods, hideAll } from "./layers.ts";
 import { loadSource } from "./source.ts";
 
 export interface EncodeDeps {
@@ -69,27 +64,15 @@ export function createEncodeHandler({ images, operations, storage }: EncodeDeps)
   return async ({ operation }, context) => {
     const params = EncodeParams.safeParse(operation.params);
     if (!params.success) throw new JobError("invalid_params");
-    const [selection] = params.data.layers;
-    let method: ReturnType<typeof createMethod>;
-    try {
-      method = createMethod(selection);
-    } catch (error) {
-      if (error instanceof RangeError) throw new JobError("invalid_params", { cause: error });
-      throw error;
-    }
+    const methods = buildMethods(params.data.layers);
 
-    const message = await context.message();
+    const messages = await context.messages();
+    if (messages.length !== methods.length) throw new JobError("invalid_params");
     const source = await loadSource({ images, storage }, operation);
     context.signal.throwIfAborted();
 
     const started = performance.now();
-    let stego: ReturnType<typeof hide>;
-    try {
-      stego = hide(source, message, method);
-    } catch (error) {
-      if (error instanceof CapacityExceededError) throw new JobError("capacity_exceeded");
-      throw error;
-    }
+    const stego = hideAll(source, methods, messages);
     const png = await encodePng(stego);
     const encodeMs = performance.now() - started;
     if (png.byteLength > MAX_PNG_BYTES) throw new JobError("image_too_large");
@@ -103,11 +86,18 @@ export function createEncodeHandler({ images, operations, storage }: EncodeDeps)
       await storeStego(operation, stego, png);
     }
 
+    const available = capacityLayered(source.width, source.height, methods);
     const result: EncodeResult = {
       kind: "encode",
-      messageBytes: new TextEncoder().encode(message).byteLength,
-      capacityBytes: Math.min(capacity(source.width, source.height, method), MAX_MESSAGE_BYTES),
+      layers: params.data.layers.map(({ id }, index) => ({
+        method: id,
+        messageBytes: new TextEncoder().encode(messages[index]).byteLength,
+        capacityBytes: Math.min(available[index] as number, MAX_MESSAGE_BYTES),
+      })),
       psnr: Number.isFinite(quality) ? quality : null,
+      // SSIM needs a window that fits inside the image.
+      ssim:
+        Math.min(source.width, source.height) >= EXPERIMENT_MIN_SIDE ? ssim(source, stego) : null,
       encodeMs: Math.round(encodeMs),
     };
     return result;

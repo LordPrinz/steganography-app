@@ -32,13 +32,22 @@ export interface JobQueueOptions {
 export class JobError extends Error {
   override readonly name = "JobError";
 
+  /** Index in the request of the layer that failed, when the failure belongs to one. */
+  readonly layer: number | undefined;
+
   constructor(
     readonly code: string,
-    options?: ErrorOptions,
+    options?: ErrorOptions & { layer?: number },
   ) {
     if (!/^[a-z][a-z0-9_]{0,63}$/.test(code))
       throw new RangeError(`Invalid job error code "${code}"`);
+    if (
+      options?.layer !== undefined &&
+      !(Number.isInteger(options.layer) && options.layer >= 0 && options.layer <= 2)
+    )
+      throw new RangeError(`Invalid failure layer ${options.layer}`);
     super(code, options);
+    this.layer = options?.layer;
   }
 }
 
@@ -169,7 +178,8 @@ export function createJobQueue(sql: SQL, options: JobQueueOptions = {}): JobQueu
       return sql.begin(async (tx) => {
         // attempts acts as a fencing token: after a lease expiry another worker owns a higher attempt.
         const updated = await tx`
-          UPDATE jobs SET status = 'succeeded', error = NULL, locked_at = NULL, finished_at = now()
+          UPDATE jobs SET status = 'succeeded', error = NULL, failure_layer = NULL, locked_at = NULL,
+                          finished_at = now()
           WHERE id = ${job.id} AND status = 'running' AND attempts = ${job.attempts}
           RETURNING id
         `;
@@ -184,17 +194,20 @@ export function createJobQueue(sql: SQL, options: JobQueueOptions = {}): JobQueu
 
     async fail(job, error, { retry = true } = {}) {
       const code = errorCode(error);
+      // Replaced on every failure, so a later attempt does not keep an earlier attempt's layer.
+      const layer = error instanceof JobError ? (error.layer ?? null) : null;
       const final = !retry || job.attempts >= maxAttempts;
       const delaySecs = backoffMs(job.attempts, backoffBaseMs, backoffMaxMs) / 1000;
       return sql.begin(async (tx) => {
         const updated = final
           ? await tx`
-              UPDATE jobs SET status = 'failed', error = ${code}, locked_at = NULL, finished_at = now()
+              UPDATE jobs SET status = 'failed', error = ${code}, failure_layer = ${layer},
+                              locked_at = NULL, finished_at = now()
               WHERE id = ${job.id} AND status = 'running' AND attempts = ${job.attempts}
               RETURNING id
             `
           : await tx`
-              UPDATE jobs SET status = 'queued', error = ${code}, locked_at = NULL,
+              UPDATE jobs SET status = 'queued', error = ${code}, failure_layer = ${layer}, locked_at = NULL,
                               run_after = now() + make_interval(secs => ${delaySecs})
               WHERE id = ${job.id} AND status = 'running' AND attempts = ${job.attempts}
               RETURNING id

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { type Attack, Scenario } from "./attacks.ts";
 import { StegoMethod } from "./methods.ts";
-import { MethodSelection } from "./selections.ts";
+import { LayerList, MethodSelection } from "./selections.ts";
 
 /** Largest image an experiment accepts, in pixels: the lab runs every attack on it, many times. */
 export const EXPERIMENT_MAX_PIXELS = 1024 * 1024;
@@ -49,10 +49,23 @@ function attackLabel(attack: Attack): string {
   return `blur${attack.sigma}`;
 }
 
+/** 1 to 16 scenarios that chain at most 48 attacks in total. */
+const ScenarioList = z
+  .array(Scenario)
+  .min(1)
+  .max(MAX_MODE_B_SCENARIOS)
+  .refine(
+    (scenarios) =>
+      scenarios.reduce((sum, { length }) => sum + length, 0) <= MAX_MODE_B_ATTACK_STEPS,
+    `At most ${MAX_MODE_B_ATTACK_STEPS} attacks across all scenarios`,
+  );
+
 /**
  * Mode A: every method with its defaults against the default scenarios. Mode B: one method (with
- * parameters and an optional error-correcting code) against the scenarios chosen. The message has no
- * length cap here, as for encode: it is checked against the capacity of every method.
+ * parameters and an optional error-correcting code) against the scenarios chosen. Mode "layered": 1 to
+ * 3 methods, each with its own message, hidden together in one image by `hideLayered`, against the
+ * scenarios chosen; every layer is measured on its own. The message has no length cap here, as for
+ * encode: it is checked against the capacity of every method it runs.
  */
 export const ExperimentRequest = z.discriminatedUnion("mode", [
   z.strictObject({ mode: z.literal("A"), imageId: z.uuid(), message: z.string().min(1) }),
@@ -61,25 +74,27 @@ export const ExperimentRequest = z.discriminatedUnion("mode", [
     imageId: z.uuid(),
     message: z.string().min(1),
     method: MethodSelection,
-    scenarios: z
-      .array(Scenario)
-      .min(1)
-      .max(MAX_MODE_B_SCENARIOS)
-      .refine(
-        (scenarios) =>
-          scenarios.reduce((sum, { length }) => sum + length, 0) <= MAX_MODE_B_ATTACK_STEPS,
-        `At most ${MAX_MODE_B_ATTACK_STEPS} attacks across all scenarios`,
-      ),
+    scenarios: ScenarioList,
+  }),
+  z.strictObject({
+    mode: z.literal("layered"),
+    imageId: z.uuid(),
+    layers: LayerList,
+    scenarios: ScenarioList,
   }),
 ]);
 export type ExperimentRequest = z.infer<typeof ExperimentRequest>;
+
+export const ExperimentMode = z.enum(["A", "B", "layered"]);
+export type ExperimentMode = z.infer<typeof ExperimentMode>;
 
 /**
  * What the experiment job reads from `operations.params`; the message is never part of it. The API
  * expands mode A into explicit lists, so a later change of the defaults cannot alter a queued job.
  */
 export const ExperimentParams = z.object({
-  mode: z.enum(["A", "B"]),
+  mode: ExperimentMode,
+  /** In request order; for "layered" these are the layers, hidden together. */
   methods: z.array(MethodSelection).min(1),
   scenarios: z.array(Scenario).min(1),
 });
@@ -107,12 +122,18 @@ export const ExperimentVariant = z.object({
   ssim: z.number(),
   /** Milliseconds to attack the image and read the message back. */
   timeMs: z.number().nonnegative(),
-  /** The stored attacked image; null when it could not be stored (too large, or over the storage cap). */
+  /**
+   * The stored attacked image; null when it could not be stored (too large, or over the storage cap).
+   * In layered mode all layers of a scenario share one image.
+   */
   imageId: z.uuid().nullable(),
 });
 export type ExperimentVariant = z.infer<typeof ExperimentVariant>;
 
-/** What embedding did, before any attack. */
+/**
+ * What embedding did, before any attack. In layered mode the PSNR, SSIM and time are those of the
+ * whole image with every layer, so they repeat on each layer's entry.
+ */
 export const ExperimentMethodSummary = z.object({
   method: StegoMethod,
   ecc: EccCode.nullable(),
@@ -143,7 +164,8 @@ export type ExperimentAggregate = z.infer<typeof ExperimentAggregate>;
 
 export const ExperimentResult = z.object({
   kind: z.literal("experiment"),
-  mode: z.enum(["A", "B"]),
+  mode: ExperimentMode,
+  /** UTF-8 bytes of the message; the sum over the layers in layered mode. */
   messageBytes: z.number().int().nonnegative(),
   methods: z.array(ExperimentMethodSummary),
   variants: z.array(ExperimentVariant),

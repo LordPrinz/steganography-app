@@ -56,6 +56,7 @@ function pixels(width: number, height: number) {
 const testPng = () => encodePng(pixels(32, 32));
 const SECRET = "the-secret-message";
 const lsb = { id: "lsb", params: { bitsPerChannel: 1 } };
+const layer = (method: object, message = SECRET) => ({ method, message });
 
 async function errorCode(res: Response): Promise<string> {
   return ApiError.parse(await res.json()).error.code;
@@ -82,8 +83,7 @@ describe.each(backends)("operations API (%s)", (_name, backend) => {
     const encode = (c: Client, body: Record<string, unknown> = {}) =>
       c.postJson("/operations/encode", {
         imageId: image.id,
-        message: SECRET,
-        layers: [lsb],
+        layers: [layer(lsb)],
         ...body,
       });
     return { deps, kv: deps.kv, client, ann, image, handoff, encode };
@@ -97,7 +97,7 @@ describe.each(backends)("operations API (%s)", (_name, backend) => {
       const accepted = OperationAccepted.parse(await res.json());
       expect(accepted.status).toBe("queued");
       expect(res.headers.get("location")).toBe(`/api/v1/operations/${accepted.id}`);
-      expect(await handoff.getMessage(accepted.id)).toBe(SECRET);
+      expect(await handoff.getMessages(accepted.id)).toEqual([SECRET]);
 
       const got = await ann.request("GET", `/operations/${accepted.id}`);
       expect(got.status).toBe(200);
@@ -119,8 +119,7 @@ describe.each(backends)("operations API (%s)", (_name, backend) => {
     test("fills in default parameters", async () => {
       const { ann, encode } = await start();
       const res = await encode(ann, {
-        message: "hi",
-        layers: [{ id: "dwt-qim", params: { level: 1 } }],
+        layers: [layer({ id: "dwt-qim", params: { level: 1 } }, "hi")],
       });
       expect(res.status).toBe(202);
     });
@@ -131,8 +130,7 @@ describe.each(backends)("operations API (%s)", (_name, backend) => {
       servers.push(server);
       const res = await new Client(server.url, "x@example.com").postJson("/operations/encode", {
         imageId: image.id,
-        message: SECRET,
-        layers: [lsb],
+        layers: [layer(lsb)],
       });
       expect(res.status).toBe(401);
     });
@@ -140,15 +138,27 @@ describe.each(backends)("operations API (%s)", (_name, backend) => {
     test("rejects a malformed or unknown request", async () => {
       const { ann, encode } = await start();
       for (const body of [
-        { message: "" },
+        { layers: [layer(lsb, "")] },
         { layers: [] },
-        { layers: [lsb, lsb] },
-        { layers: [{ id: "lsb", params: { bitsPerChannel: 9 } }] },
-        { layers: [{ id: "lsb", params: { bitsPerChannel: 1, extra: true } }] },
-        { layers: [{ id: "dwt-qim", params: { level: 3, step: 8 } }] },
+        { layers: [layer(lsb), layer(lsb, "other")] },
+        { layers: [layer(lsb), layer({ id: "lsb", ecc: { code: "hamming74" } }, "other")] },
         {
           layers: [
-            {
+            layer({ id: "lsb" }),
+            layer({ id: "dwt-qim" }),
+            layer({ id: "dct-koch-zhao" }),
+            layer({ id: "lsb" }),
+          ],
+        },
+        { message: SECRET },
+        { layers: [lsb] },
+        { layers: [{ method: lsb }] },
+        { layers: [layer({ id: "lsb", params: { bitsPerChannel: 9 } })] },
+        { layers: [layer({ id: "lsb", params: { bitsPerChannel: 1, extra: true } })] },
+        { layers: [layer({ id: "dwt-qim", params: { level: 3, step: 8 } })] },
+        {
+          layers: [
+            layer({
               id: "dct-koch-zhao",
               params: {
                 pair: [
@@ -156,11 +166,11 @@ describe.each(backends)("operations API (%s)", (_name, backend) => {
                   [1, 2],
                 ],
               },
-            },
+            }),
           ],
         },
-        { layers: [{ id: "lsb", ecc: { code: "repetition", factor: 4 } }] },
-        { layers: [{ id: "rot13" }] },
+        { layers: [layer({ id: "lsb", ecc: { code: "repetition", factor: 4 } })] },
+        { layers: [layer({ id: "rot13" })] },
         { imageId: "not-a-uuid" },
         { extra: 1 },
       ]) {
@@ -172,11 +182,11 @@ describe.each(backends)("operations API (%s)", (_name, backend) => {
 
     test("refuses a message that does not fit, with the sizes", async () => {
       const { ann, encode, deps } = await start();
-      const res = await encode(ann, { message: "x".repeat(5_000) });
+      const res = await encode(ann, { layers: [layer(lsb, "x".repeat(5_000))] });
       expect(res.status).toBe(422);
       const { error } = ApiError.parse(await res.json());
       expect(error.code).toBe("message_too_large");
-      expect(error.details).toMatchObject({ needed: 5_000 });
+      expect(error.details).toMatchObject({ needed: 5_000, layer: 0, method: "lsb" });
       expect((error.details as { available: number }).available).toBeLessThan(5_000);
       expect(JSON.stringify(error)).not.toContain("xxxxx");
       expect(await deps.kv.get("op:x:message")).toBeNull();
@@ -185,10 +195,9 @@ describe.each(backends)("operations API (%s)", (_name, backend) => {
     test("counts error correction against the capacity", async () => {
       const { ann, encode } = await start();
       const message = "y".repeat(60);
-      expect((await encode(ann, { message })).status).toBe(202);
+      expect((await encode(ann, { layers: [layer(lsb, message)] })).status).toBe(202);
       const res = await encode(ann, {
-        message,
-        layers: [{ ...lsb, ecc: { code: "repetition", factor: 7 } }],
+        layers: [layer({ ...lsb, ecc: { code: "repetition", factor: 7 } }, message)],
       });
       expect(res.status).toBe(422);
     });
@@ -238,6 +247,73 @@ describe.each(backends)("operations API (%s)", (_name, backend) => {
     });
   });
 
+  describe("layered encode", () => {
+    const layers = (messages: [string, string, string] = ["m-lsb", "m-dwt", "m-dct"]) => [
+      layer({ id: "lsb" }, messages[0]),
+      layer({ id: "dwt-qim" }, messages[1]),
+      layer({ id: "dct-koch-zhao" }, messages[2]),
+    ];
+
+    test("queues three layers: methods in the params, every message in Redis only", async () => {
+      const { ann, handoff, encode, image } = await start();
+      const big = await ann.uploadMeta(await encodePng(pixels(256, 256)));
+      const res = await encode(ann, { imageId: big.id, layers: layers() });
+      expect(res.status).toBe(202);
+      const { id } = OperationAccepted.parse(await res.json());
+      expect(await handoff.getMessages(id)).toEqual(["m-lsb", "m-dwt", "m-dct"]);
+
+      const text = await (await ann.request("GET", `/operations/${id}`)).text();
+      for (const message of ["m-lsb", "m-dwt", "m-dct"]) expect(text).not.toContain(message);
+      const op = Operation.parse(JSON.parse(text));
+      // Several layers have no single method: the history shows them as "auto".
+      expect(op).toMatchObject({ type: "encode", status: "queued", method: "auto" });
+      expect(op.params).toEqual({
+        layers: [
+          { id: "lsb", params: { bitsPerChannel: 1 } },
+          { id: "dwt-qim", params: { band: "LL", level: 2, step: 32 } },
+          {
+            id: "dct-koch-zhao",
+            params: {
+              pair: [
+                [3, 2],
+                [2, 3],
+              ],
+              strength: 40,
+            },
+          },
+        ],
+      });
+      expect(image.id).not.toBe(big.id);
+    });
+
+    test("names the layer that does not fit, with its sizes and method", async () => {
+      const { ann, encode, handoff } = await start();
+      // The 32 x 32 test image holds an LSB frame but not even an empty one in the DCT.
+      const res = await encode(ann, {
+        layers: [layer(lsb, "fits"), layer({ id: "dct-koch-zhao" }, "x")],
+      });
+      expect(res.status).toBe(422);
+      const { error } = ApiError.parse(await res.json());
+      expect(error.code).toBe("message_too_large");
+      expect(error.details).toMatchObject({
+        needed: 1,
+        available: 0,
+        layer: 1,
+        method: "dct-koch-zhao",
+      });
+      expect(JSON.stringify(error)).not.toContain("fits");
+      expect(await handoff.getMessages("none")).toBeNull();
+    });
+
+    test("another user's image is a 404 for a layered request too", async () => {
+      const { client, encode } = await start();
+      const bob = await client("bob@example.com");
+      const res = await encode(bob, { layers: layers() });
+      expect(res.status).toBe(404);
+      expect(await errorCode(res)).toBe("image_not_found");
+    });
+  });
+
   describe("message size", () => {
     // 512 x 512 holds 98 KiB with one bit per channel, more than MAX_MESSAGE_BYTES plus the frame.
     const LIMIT = MAX_MESSAGE_BYTES;
@@ -247,7 +323,7 @@ describe.each(backends)("operations API (%s)", (_name, backend) => {
       const data = new Uint8ClampedArray(512 * 512 * 4).fill(128);
       const image = await ctx.ann.uploadMeta(await encodePng({ width: 512, height: 512, data }));
       const send = (message: string) =>
-        ctx.encode(ctx.ann, { imageId: image.id, message, layers: [{ id: "lsb" }] });
+        ctx.encode(ctx.ann, { imageId: image.id, layers: [layer({ id: "lsb" }, message)] });
       return { ...ctx, send };
     }
 
@@ -302,6 +378,39 @@ describe.each(backends)("operations API (%s)", (_name, backend) => {
       }
     });
 
+    test("accepts a list of methods, shown as auto, and refuses repeated or too many", async () => {
+      const { ann, image } = await start();
+      const method = [
+        { id: "dwt-qim", params: { step: 64 } },
+        { id: "lsb", ecc: { code: "hamming74" } },
+      ];
+      const res = await ann.postJson("/operations/decode", { imageId: image.id, method });
+      expect(res.status).toBe(202);
+      const { id } = OperationAccepted.parse(await res.json());
+      const got = Operation.parse(await (await ann.request("GET", `/operations/${id}`)).json());
+      expect(got).toMatchObject({ type: "decode", method: "auto" });
+      expect(got.params).toMatchObject({ method: [{ id: "dwt-qim" }, { id: "lsb" }] });
+
+      const one = await ann.postJson("/operations/decode", { imageId: image.id, method: [lsb] });
+      const oneId = OperationAccepted.parse(await one.json()).id;
+      const single = Operation.parse(
+        await (await ann.request("GET", `/operations/${oneId}`)).json(),
+      );
+      expect(single.method).toBe("lsb");
+
+      for (const bad of [
+        [],
+        [lsb, lsb],
+        [{ id: "lsb" }, { id: "dwt-qim" }, { id: "dct-koch-zhao" }, { id: "lsb" }],
+      ]) {
+        const refused = await ann.postJson("/operations/decode", {
+          imageId: image.id,
+          method: bad,
+        });
+        expect(refused.status).toBe(400);
+      }
+    });
+
     test("rejects a malformed request", async () => {
       const { ann, image } = await start();
       for (const body of [
@@ -347,7 +456,7 @@ describe.each(backends)("operations API (%s)", (_name, backend) => {
       expect(missing.status).toBe(404);
       expect(await errorCode(missing)).toBe("not_found");
       // A revealed message is not handed out either.
-      await handoff.putRevealed(id, SECRET);
+      await handoff.putRevealed(id, { lsb: SECRET });
       expect(await (await bob.request("GET", `/operations/${id}`)).text()).not.toContain(SECRET);
     });
 

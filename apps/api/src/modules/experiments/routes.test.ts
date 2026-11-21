@@ -103,7 +103,7 @@ describe.each(backends)("experiments API (%s)", (_name, backend) => {
       const accepted = OperationAccepted.parse(await res.json());
       expect(accepted.status).toBe("queued");
       expect(res.headers.get("location")).toBe(`/api/v1/experiments/${accepted.id}`);
-      expect(await handoff.getMessage(accepted.id)).toBe(SECRET);
+      expect(await handoff.getMessages(accepted.id)).toEqual([SECRET]);
 
       const got = await ann.request("GET", `/experiments/${accepted.id}`);
       expect(got.status).toBe(200);
@@ -241,8 +241,7 @@ describe.each(backends)("experiments API (%s)", (_name, backend) => {
       expect(await errorCode(exp)).toBe("image_not_found");
       const enc = await ann.postJson("/operations/encode", {
         imageId,
-        message: SECRET,
-        layers: [{ id: "lsb" }],
+        layers: [{ method: { id: "lsb" }, message: SECRET }],
       });
       expect(enc.status).toBe(404);
       const dec = await ann.postJson("/operations/decode", { imageId, method: "auto" });
@@ -265,6 +264,72 @@ describe.each(backends)("experiments API (%s)", (_name, backend) => {
       )) as NonNullable<Awaited<ReturnType<typeof deps.images.createVariant>>>;
       await Bun.sleep(10);
       expect((await ann.request("GET", `/images/${variant.id}`)).status).toBe(404);
+    });
+
+    test("layered mode queues the layers, with each message in Redis only", async () => {
+      const { ann, image, handoff } = await start();
+      const res = await ann.postJson("/experiments", {
+        mode: "layered",
+        imageId: image.id,
+        layers: [
+          { method: { id: "dct-koch-zhao" }, message: "m-dct" },
+          { method: { id: "lsb" }, message: "m-lsb" },
+        ],
+        scenarios: [[], [{ type: "jpeg", quality: 70 }]],
+      });
+      expect(res.status).toBe(202);
+      const { id } = OperationAccepted.parse(await res.json());
+      expect(await handoff.getMessages(id)).toEqual(["m-dct", "m-lsb"]);
+      const text = await (await ann.request("GET", `/experiments/${id}`)).text();
+      expect(text).not.toContain("m-dct");
+      expect(text).not.toContain("m-lsb");
+      const view = Experiment.parse(JSON.parse(text));
+      expect(view.method).toBe("auto");
+      expect(ExperimentParams.parse(view.params)).toMatchObject({
+        mode: "layered",
+        methods: [{ id: "dct-koch-zhao" }, { id: "lsb" }],
+        scenarios: [[], [{ type: "jpeg", quality: 70 }]],
+      });
+    });
+
+    test("layered mode counts layers times scenarios against the variant cap", async () => {
+      const { ann, image } = await start();
+      const body = (count: number) => ({
+        mode: "layered",
+        imageId: image.id,
+        layers: [
+          { method: { id: "lsb" }, message: "a" },
+          { method: { id: "dwt-qim" }, message: "b" },
+          { method: { id: "dct-koch-zhao" }, message: "c" },
+        ],
+        scenarios: Array.from({ length: count }, (_, i) => [{ type: "jpeg", quality: 50 + i }]),
+      });
+      expect((await ann.postJson("/experiments", body(12))).status).toBe(202);
+      const res = await ann.postJson("/experiments", body(13));
+      expect(res.status).toBe(400);
+      const { error } = ApiError.parse(await res.json());
+      expect(error).toMatchObject({
+        code: "too_many_variants",
+        details: { variants: 39, maxVariants: 36 },
+      });
+    });
+
+    test("layered mode names the layer that does not fit", async () => {
+      const { ann, image } = await start();
+      const small = await ann.uploadMeta(await encodePng(pixels(32, 32)));
+      const res = await ann.postJson("/experiments", {
+        mode: "layered",
+        imageId: small.id,
+        layers: [
+          { method: { id: "lsb" }, message: "fits" },
+          { method: { id: "dct-koch-zhao" }, message: "does not" },
+        ],
+        scenarios: [[]],
+      });
+      expect(res.status).toBe(422);
+      const { error } = ApiError.parse(await res.json());
+      expect(error.details).toMatchObject({ layer: 1, method: "dct-koch-zhao" });
+      expect(image.id).not.toBe(small.id);
     });
 
     test("refuses a message that does not fit every method, naming the method", async () => {
@@ -306,7 +371,7 @@ describe.each(backends)("experiments API (%s)", (_name, backend) => {
       expect(res.status).toBe(429);
       expect(await errorCode(res)).toBe("too_many_operations");
       const handoff = createMessageHandoff(deps.kv);
-      for (const id of accepted) expect(await handoff.getMessage(id)).toBe(SECRET);
+      for (const id of accepted) expect(await handoff.getMessages(id)).toEqual([SECRET]);
     });
 
     test("is rate limited per user, with its own limit", async () => {

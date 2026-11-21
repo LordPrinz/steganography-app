@@ -83,6 +83,7 @@ function fixture() {
       status: "running",
       attempts: 1,
       error: null,
+      failure_layer: null,
       run_after: new Date(),
       locked_at: new Date(),
       finished_at: null,
@@ -98,15 +99,15 @@ function fixture() {
     };
   }
 
-  const revealed: string[] = [];
-  function context(message: string | null = SECRET): JobContext {
+  const revealed: Record<string, string>[] = [];
+  function context(message: string | string[] | null = SECRET): JobContext {
     return {
       signal: new AbortController().signal,
-      message: async () => {
+      messages: async () => {
         if (message === null) throw new JobError("message_expired");
-        return message;
+        return Array.isArray(message) ? message : [message];
       },
-      reveal: async (text) => void revealed.push(text),
+      reveal: async (found) => void revealed.push({ ...found }),
     };
   }
 
@@ -114,6 +115,14 @@ function fixture() {
 }
 
 const lsb = { id: "lsb", params: { bitsPerChannel: 1 } };
+
+/** The failure's public code and the layer it names. */
+async function failure(promise: Promise<unknown>): Promise<[string, number | undefined]> {
+  return promise.then(
+    () => ["", undefined],
+    (error) => [error instanceof JobError ? error.code : String(error), error.layer],
+  );
+}
 
 async function code(promise: Promise<unknown>): Promise<string | undefined> {
   return promise.then(
@@ -132,10 +141,12 @@ describe("encode handler", () => {
 
     expect(result).toMatchObject({
       kind: "encode",
-      messageBytes: new TextEncoder().encode(SECRET).length,
+      layers: [{ method: "lsb", messageBytes: new TextEncoder().encode(SECRET).length }],
     });
     expect(result.psnr).toBeGreaterThan(30);
-    expect(result.capacityBytes).toBeGreaterThan(result.messageBytes);
+    expect(result.ssim).toBeGreaterThan(0.9);
+    const [layer] = result.layers;
+    expect(layer?.capacityBytes).toBeGreaterThan(layer?.messageBytes ?? Number.POSITIVE_INFINITY);
     expect(JSON.stringify(result)).not.toContain("attack");
 
     const [[operationId, imageId]] = f.attached as [[string, string]];
@@ -188,6 +199,89 @@ describe("encode handler", () => {
       "invalid_params",
     );
     expect(await code(handler(f.job("encode", big.id, {}), f.context()))).toBe("invalid_params");
+    expect(f.attached).toEqual([]);
+  });
+
+  test("hides several layers in one image and reports each", async () => {
+    const f = fixture();
+    const source = await f.addImage();
+    const layers = [lsb, { id: "dwt-qim" }, { id: "dct-koch-zhao" }];
+    const job = f.job("encode", source.id, { layers });
+    const result = (await createEncodeHandler(f)(
+      job,
+      f.context(["one", "two", "three"]),
+    )) as EncodeResult;
+    expect(result.layers.map((l) => [l.method, l.messageBytes])).toEqual([
+      ["lsb", 3],
+      ["dwt-qim", 3],
+      ["dct-koch-zhao", 5],
+    ]);
+    expect(JSON.stringify(result)).not.toContain("three");
+    const [[, stegoId]] = f.attached as [[string, string]];
+    const found = (await createDecodeHandler(f)(
+      f.job("decode", stegoId, { method: "auto" }),
+      f.context(),
+    )) as DecodeResult;
+    expect(found.found).toEqual(["lsb", "dct-koch-zhao", "dwt-qim"]);
+    expect(f.revealed).toEqual([{ lsb: "one", "dwt-qim": "two", "dct-koch-zhao": "three" }]);
+  });
+
+  test("a list decode reveals layers with other parameters or a code that auto cannot read", async () => {
+    const f = fixture();
+    const source = await f.addImage();
+    const layers = [
+      lsb,
+      { id: "dwt-qim", params: { band: "LL", level: 2, step: 64 } },
+      { id: "dct-koch-zhao", ecc: { code: "hamming74" } },
+    ];
+    await createEncodeHandler(f)(
+      f.job("encode", source.id, { layers }),
+      f.context(["one", "two", "three"]),
+    );
+    const [, stegoId] = f.attached.at(-1) as [string, string];
+    const decode = createDecodeHandler(f);
+
+    const listed = (await decode(
+      f.job("decode", stegoId, { method: layers }),
+      f.context(),
+    )) as DecodeResult;
+    expect(listed.found).toEqual(["lsb", "dwt-qim", "dct-koch-zhao"]);
+    expect(f.revealed.at(-1)).toEqual({ lsb: "one", "dwt-qim": "two", "dct-koch-zhao": "three" });
+
+    // Auto tries the defaults only, so it reads the LSB layer and misses the other two.
+    const auto = (await decode(
+      f.job("decode", stegoId, { method: "auto" }),
+      f.context(),
+    )) as DecodeResult;
+    expect(auto.found).toEqual(["lsb"]);
+    expect(f.revealed.at(-1)).toEqual({ lsb: "one" });
+  });
+
+  test("names the layer that does not fit or does not survive, without the message", async () => {
+    const f = fixture();
+    const handler = createEncodeHandler(f);
+    const small = await f.addImage(noise(16, 16));
+    const big = await f.addImage();
+    // 16 x 16 holds an LSB frame of 90 bytes, so the second layer is the first that does not fit.
+    expect(
+      await failure(
+        handler(
+          f.job("encode", small.id, { layers: [lsb, { id: "dwt-qim" }] }),
+          f.context(["ok", "x".repeat(500)]),
+        ),
+      ),
+    ).toEqual(["capacity_exceeded", 1]);
+    expect(
+      await failure(
+        handler(f.job("encode", big.id, { layers: [lsb] }), f.context(["x".repeat(99999)])),
+      ),
+    ).toEqual(["capacity_exceeded", 0]);
+    // A message count that does not match the layers is a bad job, not a crash.
+    expect(
+      await code(
+        handler(f.job("encode", big.id, { layers: [lsb, { id: "dwt-qim" }] }), f.context("only")),
+      ),
+    ).toBe("invalid_params");
     expect(f.attached).toEqual([]);
   });
 
@@ -248,7 +342,7 @@ describe("encode handler", () => {
     expect(f.puts).toEqual([]);
     expect(f.attached).toHaveLength(1);
     expect((await f.images.usage(USER)).count).toBe(2);
-    expect(again).toMatchObject({ kind: "encode", messageBytes: first.messageBytes });
+    expect(again).toMatchObject({ kind: "encode", layers: first.layers });
   });
 
   test("writes nothing once aborted", async () => {
@@ -292,10 +386,11 @@ describe("decode handler", () => {
       f.job("decode", id, { method: lsb }),
       f.context(),
     )) as DecodeResult;
-    expect(f.revealed).toEqual([SECRET]);
+    expect(f.revealed).toEqual([{ lsb: SECRET }]);
     expect(result).toMatchObject({
       kind: "decode",
       detected: "lsb",
+      found: ["lsb"],
       attempts: [
         {
           method: "lsb",
@@ -330,7 +425,7 @@ describe("decode handler", () => {
     expect(result.attempts.map((a) => a.method)).toEqual(AUTO_SELECTIONS.map((s) => s.id));
     expect(result.detected).toBe("dwt-qim");
     expect(result.attempts.find((a) => a.method === "dwt-qim")?.outcome).toBe("found");
-    expect(f.revealed).toEqual([SECRET]);
+    expect(f.revealed).toEqual([{ "dwt-qim": SECRET }]);
   });
 
   test("auto on a clean image finds no message with any method", async () => {
