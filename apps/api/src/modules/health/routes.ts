@@ -1,8 +1,8 @@
 import type { HealthResponse, ReadinessResponse } from "@stego/contracts";
+import type { KeyValueStore } from "@stego/kv";
 import type { ObjectStore } from "@stego/storage";
 import pkg from "../../../package.json" with { type: "json" };
 import { json } from "../../lib/http.ts";
-import type { KeyValueStore } from "../../lib/kv/store.ts";
 
 const startedAt = performance.now();
 

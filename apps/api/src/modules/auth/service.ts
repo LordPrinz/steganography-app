@@ -1,6 +1,6 @@
 import type { AuthUser } from "@stego/contracts";
 import type { RefreshTokenRepository, UserRepository, UserRow } from "@stego/db";
-import type { KeyValueStore } from "../../lib/kv/store.ts";
+import type { KeyValueStore } from "@stego/kv";
 import { type AccessTokens, hashRefreshToken, newRefreshToken } from "./tokens.ts";
 
 export interface Session {

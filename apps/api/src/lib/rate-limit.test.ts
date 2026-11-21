@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createMemoryStore } from "./kv/memory.ts";
+import { createMemoryStore } from "@stego/kv";
 import { createRateLimiter } from "./rate-limit.ts";
 
 function fakeClock(start = 0) {

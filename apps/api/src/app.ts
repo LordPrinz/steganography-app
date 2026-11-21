@@ -1,8 +1,8 @@
 import type { RefreshTokenRepository, UserRepository } from "@stego/db";
+import type { KeyValueStore } from "@stego/kv";
 import type { ObjectStore } from "@stego/storage";
 import { requireOrigin } from "./lib/csrf.ts";
 import { API_PREFIX, errorResponse, HttpError, mount } from "./lib/http.ts";
-import type { KeyValueStore } from "./lib/kv/store.ts";
 import { authRoutes } from "./modules/auth/routes.ts";
 import { createAuthService } from "./modules/auth/service.ts";
 import { createAccessTokens } from "./modules/auth/tokens.ts";

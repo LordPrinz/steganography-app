@@ -1,4 +1,4 @@
-import { assertTtl, type KeyValueStore } from "./kv/store.ts";
+import { assertTtl, type KeyValueStore } from "@stego/kv";
 
 export interface RateLimitOptions {
   /** Separates limiters, e.g. "login". Lowercase letters, digits and dashes. */

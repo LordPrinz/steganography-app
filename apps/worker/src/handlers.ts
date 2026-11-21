@@ -6,6 +6,13 @@ export interface JobContext {
    * between steps, stop early and write no side effects (storage, rows) after it fires.
    */
   signal: AbortSignal;
+  /**
+   * The hidden message to embed. Throws `JobError("message_expired")` when it is gone, which fails the
+   * job without a retry. Keep it out of errors, logs and results.
+   */
+  message(): Promise<string>;
+  /** Hands a decoded message to the user through Redis; it expires on its own and never reaches Postgres. */
+  reveal(message: string): Promise<void>;
 }
 
 /**
