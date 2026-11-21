@@ -14,7 +14,7 @@ The robustness lab is the core of the project; accounts and gallery are standard
 
 ```
 web (Next.js) ──/api/v1/* rewrite──▶ api (Bun.serve) ──▶ Postgres (jobs, metadata)
-                                        ├──▶ Redis (rate limits, cache)
+                                        ├──▶ Redis (rate limits, cache, message handoff)
                                         │                    ▲
                                         ▼                    │
                                   R2 / RustFS ◀─────── worker (Bun)
@@ -85,9 +85,20 @@ stored as `internal_error`, and its details go only to the worker log. Handler r
 
 ### Redis for ephemeral state
 
-Rate-limit counters and small caches live in Redis behind a `KeyValueStore` port (Bun `RedisClient`).
-Only losable, short-lived data goes there; anything durable stays in Postgres. `GET /api/v1/health/ready`
-reports 503 when Redis is down. See ADR 3.
+Rate-limit counters, small caches and the hidden message in transit live in Redis behind a `KeyValueStore`
+port (Bun `RedisClient`). The port, its adapters and the message handoff are in `@stego/kv`, which both
+apps import. Only losable, short-lived data goes there; anything durable stays in Postgres.
+`GET /api/v1/health/ready` reports 503 when Redis is down, and the worker claims no job while Redis does
+not answer. See ADR 3.
+
+The hidden message never reaches Postgres or the logs. For encode, the API stores it under
+`op:{operationId}:message` (TTL 15 min, at most `MAX_MESSAGE_BYTES`) in the request that enqueues the
+job. The handler reads it with `context.message()` on every attempt, so retries work. The worker deletes
+it once the job is succeeded or failed for good. A missing or expired message fails the job with
+`message_expired` and no retry. For decode, the handler calls `context.reveal()`, which stores the text
+under `op:{operationId}:revealed` (TTL 5 min). `GET` on the operation returns it while the key exists;
+afterwards the history shows only the outcome. Key names use the operation id only. Redis keeps an AOF on
+disk, so a message can outlive its delete in the file until the next rewrite; the TTLs bound the window.
 
 ### Image processing on Bun.Image
 

@@ -1,15 +1,22 @@
 import { createDb, createJobQueue } from "@stego/db";
+import { createMessageHandoff, createRedisStore, keepConnected } from "@stego/kv";
+import { RedisClient } from "bun";
 import { loadEnv } from "./env.ts";
 import type { JobHandlers } from "./handlers.ts";
 import { createWorker } from "./worker.ts";
 
 const env = loadEnv();
 const sql = createDb(env.DATABASE_URL);
+const redis = new RedisClient(env.REDIS_URL, { enableOfflineQueue: false });
+keepConnected(redis);
+const kv = createRedisStore(redis);
 // Encode, decode and experiment handlers are registered here as their issues land.
 const handlers: JobHandlers = {};
 const worker = createWorker({
   queue: createJobQueue(sql),
   handlers,
+  handoff: createMessageHandoff(kv),
+  ready: () => kv.ping(),
   pollIntervalMs: env.WORKER_POLL_INTERVAL_MS,
   jobTimeoutMs: env.WORKER_JOB_TIMEOUT_MS,
 });
@@ -24,4 +31,5 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 console.info("Worker started");
 await worker.run();
 await sql.close();
+redis.close();
 console.info("Worker stopped");

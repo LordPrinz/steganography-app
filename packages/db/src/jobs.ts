@@ -54,6 +54,8 @@ export interface FailOptions {
 }
 
 export interface JobQueue {
+  /** Attempts before a job is marked failed for good. */
+  readonly maxAttempts: number;
   enqueue(operationId: string, options?: EnqueueOptions): Promise<JobRow>;
   claim(): Promise<ClaimedJob | null>;
   /** Heartbeat: renews the lease of a running job. Returns false once the job is no longer ours. */
@@ -117,6 +119,7 @@ export function createJobQueue(sql: SQL, options: JobQueueOptions = {}): JobQueu
   }
 
   return {
+    maxAttempts,
     enqueue: (operationId, { tx, runAfter } = {}) => enqueueJob(tx ?? sql, operationId, runAfter),
 
     async claim() {

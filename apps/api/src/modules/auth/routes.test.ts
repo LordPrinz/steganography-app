@@ -6,9 +6,9 @@ import {
   type RefreshTokenRepositoryOptions,
 } from "@stego/db";
 import { createMemoryRefreshTokenRepository, createTestDatabase } from "@stego/db/testing";
+import type { KeyValueStore } from "@stego/kv";
+import { createMemoryStore } from "@stego/kv";
 import { createServer, type ServerDeps } from "../../app.ts";
-import { createMemoryStore } from "../../lib/kv/memory.ts";
-import type { KeyValueStore } from "../../lib/kv/store.ts";
 import { createRateLimiter } from "../../lib/rate-limit.ts";
 import { TEST_JWT_SECRET, TEST_ORIGIN, testServerDeps } from "../../testing/server-deps.ts";
 import { ACCESS_COOKIE, AUTH_RATE_LIMITS, loginDelayMs, REFRESH_COOKIE } from "./routes.ts";
