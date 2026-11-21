@@ -36,6 +36,16 @@ function otherId(method: ConfiguredMethod): MethodId {
   return method.id === MethodId.Lsb ? MethodId.DwtQim : MethodId.Lsb;
 }
 
+test("at least one registered method holds MAX_MESSAGE_BYTES in a 512 x 512 image", () => {
+  // Guards the `test.if(holdsLimit)` cases below: they must not all be skipped silently.
+  const large = noiseImage(512, 512);
+  expect(
+    methodCases.some(
+      ({ method }) => capacity(large.width, large.height, method) > MAX_MESSAGE_BYTES,
+    ),
+  ).toBe(true);
+});
+
 describe.each(methodCases)("stego codec: $name", ({ method, coverSize }) => {
   const cover = noiseImage(coverSize?.width ?? 64, coverSize?.height ?? 48);
 
@@ -204,6 +214,8 @@ describe.each(methodCases)("stego codec: $name", ({ method, coverSize }) => {
 
     test("a forged longer frame is corrupted and only its header is read", () => {
       const frame = encodeFrame(method.id, new Uint8Array(MAX_MESSAGE_BYTES + 1));
+      // Methods that cannot hold the whole forged frame still get its header, which is all
+      // `reveal` may read before it rejects the length.
       const bits = toBits(frame);
       const fitting = bits.subarray(
         0,

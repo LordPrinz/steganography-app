@@ -18,6 +18,7 @@
  * Arithmetic is double in a fixed order with -ffp-contract=off; the cosines come from a table of
  * cos(k * pi / 16) so no libm is needed.
  */
+#include <stdint.h>
 #include <string.h>
 
 #include "common.h"
@@ -113,13 +114,17 @@ int32_t stego_dct_embed(const uint8_t *rgba, uint64_t rgba_bytes, uint32_t width
   if (status != STEGO_OK) return status;
   if (!out) return STEGO_E_NULL;
   if (out_bytes != rgba_bytes) return STEGO_E_LENGTH;
+  /* The retry loop reads rgba after writing out, so the buffers must be disjoint. */
+  uintptr_t in_start = (uintptr_t)rgba, out_start = (uintptr_t)out;
+  if (in_start < out_start + out_bytes && out_start < in_start + rgba_bytes)
+    return STEGO_E_ARGUMENT;
   if (!(strength > 0.0) || strength > STEGO_DCT_MAX_STRENGTH) return STEGO_E_ARGUMENT;
 
   double *basis1 = scratch, *basis2 = scratch + BLOCK_PIXELS;
   make_basis(basis1, u1, v1);
   make_basis(basis2, u2, v2);
 
-  memmove(out, rgba, rgba_bytes);
+  memcpy(out, rgba, rgba_bytes);
   for (uint64_t block = 0; block < bit_count; block++) {
     uint64_t origin = block_origin(block, width);
     int bit = bits[block] & 1;

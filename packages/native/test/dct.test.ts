@@ -227,6 +227,32 @@ describe("C-side validation (bypassing the client)", () => {
     expect(embed({ strength: Number.NaN })).toBe(-4);
   });
 
+  test("rejects an output that overlaps the input", () => {
+    const shared = new Uint8Array(16 * 16 * 4 + 1);
+    const input = shared.subarray(0, 16 * 16 * 4);
+    const shifted = shared.subarray(1);
+    const run = (output: Uint8Array) =>
+      native().stego_dct_embed(
+        input,
+        input,
+        16,
+        16,
+        1,
+        1,
+        2,
+        1,
+        10,
+        bits,
+        bits,
+        scratch,
+        scratch,
+        output,
+        output,
+      );
+    expect(run(input)).toBe(-4);
+    expect(run(shifted)).toBe(-4);
+  });
+
   test("reports dimensions, capacity and buffer mismatches", () => {
     expect(embed({ width: 0 })).toBe(-2);
     expect(embed({ count: new Uint8Array(5) })).toBe(-3);

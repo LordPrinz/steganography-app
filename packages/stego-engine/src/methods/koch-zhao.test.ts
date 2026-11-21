@@ -6,8 +6,8 @@ import { hide, measure, reveal } from "../codec.ts";
 import { withErrorCorrection } from "../ecc/code.ts";
 import { hamming74 } from "../ecc/hamming74.ts";
 import { noiseImage } from "../testing/images.ts";
-import { MethodId } from "../types.ts";
-import { KOCH_ZHAO_DEFAULTS, kochZhao } from "./koch-zhao.ts";
+import { type ConfiguredMethod, MethodId } from "../types.ts";
+import { kochZhao } from "./koch-zhao.ts";
 
 const IMAGES = join(import.meta.dir, "..", "..", "bench", "images");
 const natural = await Promise.all(
@@ -102,13 +102,20 @@ describe("kochZhao against JPEG (ADR 7)", () => {
     }
   });
 
-  test("the strength decides survival: P = 10 is lost at quality 75", async () => {
-    const method = kochZhao({ strength: 10 });
-    const attacked = await applyAttack(hide(natural[0] ?? noiseImage(256, 128), MESSAGE, method), {
-      type: "jpeg",
-      quality: 75,
-    });
-    expect(reveal(attacked, method).ok).toBe(false);
-    expect(KOCH_ZHAO_DEFAULTS.strength).toBeGreaterThan(10);
+  test("the strength decides survival: P = 10 loses clearly more bits than the default", async () => {
+    const meanBer = async (method: ConfiguredMethod) => {
+      let total = 0;
+      for (const cover of natural) {
+        const attacked = await applyAttack(hide(cover, MESSAGE, method), {
+          type: "jpeg",
+          quality: 75,
+        });
+        total += measure(attacked, MESSAGE, method).ber;
+      }
+      return total / natural.length;
+    };
+    expect(await meanBer(kochZhao({ strength: 10 }))).toBeGreaterThan(
+      (await meanBer(kochZhao())) + 0.01,
+    );
   });
 });

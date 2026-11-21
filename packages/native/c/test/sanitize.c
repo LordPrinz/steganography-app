@@ -401,6 +401,10 @@ static void dct_case(uint32_t w, uint32_t h, uint8_t fill) {
          STEGO_OK);
   EXPECT(memcmp(rgba, out, n * 4) == 0);
 
+  /* Output overlapping the input is rejected, also when it is shifted by a single byte. */
+  EXPECT(stego_dct_embed(rgba, n * 4, w, h, 4, 1, 3, 2, 25.0, bits, capacity, scratch, sb, rgba,
+                         n * 4) == STEGO_E_ARGUMENT);
+
   /* One bit past the capacity and buffers one byte off are rejected before any access. */
   EXPECT(stego_dct_embed(rgba, n * 4, w, h, 4, 1, 3, 2, 25.0, bits, capacity + 1, scratch, sb, out,
                          n * 4) == STEGO_E_LENGTH);

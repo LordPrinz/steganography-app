@@ -137,7 +137,8 @@ int32_t stego_bit_errors(const uint8_t *a, uint64_t a_bytes, const uint8_t *b, u
  * being the first for a 1. Frequencies are 0..7 (u horizontal, v vertical), the two positions
  * differ and neither is DC. bit_count may be at most (width / 8) * (height / 8); pixels outside
  * whole blocks and the alpha channel are copied. Returns STEGO_E_EMBED when a block cannot hold its
- * bit. scratch holds STEGO_DCT_SCRATCH_DOUBLES doubles.
+ * bit. scratch holds STEGO_DCT_SCRATCH_DOUBLES doubles. out must not overlap rgba
+ * (STEGO_E_ARGUMENT).
  */
 int32_t stego_dct_embed(const uint8_t *rgba, uint64_t rgba_bytes, uint32_t width, uint32_t height,
                         uint32_t u1, uint32_t v1, uint32_t u2, uint32_t v2, double strength,
