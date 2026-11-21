@@ -1,26 +1,16 @@
 /*
  * Multi-level 2-D Haar DWT on luminance with quantisation index modulation (QIM).
  *
- * Transform: the orthonormal Haar step (a, b) -> ((a + b) / sqrt 2, (a - b) / sqrt 2) along rows,
- * then along columns, repeated on the LL quadrant for each level (Mallat layout, in place). A
- * level-L LL coefficient is the sum of a 2^L x 2^L pixel block divided by 2^L. Only the top-left
- * region whose sides are multiples of 2^level is transformed; the remaining rows and columns on the
- * right and bottom are left untouched, so the capacity of a band is (width >> level) *
- * (height >> level) bits. Luminance is Y of stego_rgba_to_ycbcr, computed in double from the RGBA
- * bytes.
+ * The transform is the orthonormal Haar step along rows, then columns, repeated on the LL quadrant
+ * (Mallat layout, in place). Only the top-left region with sides that are multiples of 2^level is
+ * transformed; the rest is left untouched. Luminance is Y of stego_rgba_to_ycbcr, in double.
  *
- * QIM: with step d, bit 0 sits on the lattice k * d and bit 1 on k * d + d / 2. A coefficient is
- * moved to the nearest point of its bit's lattice and read back as the lattice it is nearest to,
- * so any error below d / 4 is tolerated.
+ * QIM with step d: bit 0 sits on k * d, bit 1 on k * d + d / 2; reading takes the nearer lattice.
  *
- * Exact round trip: the modified luminance has to go back into 8-bit RGB. The change of each pixel
- * is rounded to an integer and added to R, G and B (which shifts Y by exactly that integer), then
- * clamped. Rounding moves a level-L coefficient by at most 2^L / 2, so d > 2^(level + 1) is safe
- * on its own. Clamping at 0 and 255 can cost more, so the embedder reads the image back the way
- * the extractor will and moves every coefficient that decodes wrongly again, up to
- * STEGO_DWT_MAX_PASSES times. Bits that still decode wrongly (a step below the rounding noise, or
- * saturated areas that cannot move far enough) are counted in *failed; the output is still a valid
- * image.
+ * Back in 8-bit RGB: each pixel's luma change is rounded and added to R, G and B, then clamped.
+ * The embedder reads the result back like the extractor and moves wrongly decoded coefficients
+ * again, up to STEGO_DWT_MAX_PASSES times; leftovers are counted in *failed. An LL coefficient can
+ * only lie in [0, 255 * 2^level], so its target is the nearest lattice point inside that range.
  */
 #include <string.h>
 
@@ -40,6 +30,8 @@ static inline double dwt_floor(double x) {
 typedef struct {
   uint32_t width;
   uint32_t level;
+  /* Range a coefficient of the band can take: bounded for LL, open for the detail bands. */
+  double lowest, highest;
   /* Transformed region: sides are multiples of 2^level. */
   uint32_t region_w, region_h;
   /* Band rectangle at the chosen level inside the plane. */
@@ -54,6 +46,8 @@ static dwt_geometry geometry(uint32_t width, uint32_t height, uint32_t band, uin
   g.band_h = height >> level;
   g.region_w = g.band_w << level;
   g.region_h = g.band_h << level;
+  g.lowest = band == STEGO_DWT_LL ? 0.0 : -1e300;
+  g.highest = band == STEGO_DWT_LL ? 255.0 * (double)(1u << level) : 1e300;
   g.band_x = band == STEGO_DWT_HL ? g.band_w : 0;
   g.band_y = band == STEGO_DWT_LH ? g.band_h : 0;
   return g;
@@ -155,9 +149,13 @@ static inline unsigned decode(double c, double step) {
   return r >= step / 4 && r < step * 3 / 4;
 }
 
-static inline double quantise(double c, unsigned bit, double step) {
+/* Nearest lattice point of the bit, moved one step inward when it lies outside the range. */
+static inline double quantise(double c, unsigned bit, double step, const dwt_geometry *g) {
   double offset = bit ? step / 2 : 0.0;
-  return dwt_floor((c - offset) / step + 0.5) * step + offset;
+  double q = dwt_floor((c - offset) / step + 0.5) * step + offset;
+  if (q > g->highest && q - step >= g->lowest) q -= step;
+  if (q < g->lowest && q + step <= g->highest) q += step;
+  return q;
 }
 
 static int32_t dwt_check(const uint8_t *rgba, uint64_t rgba_bytes, uint32_t width, uint32_t height,
@@ -209,7 +207,7 @@ int32_t stego_dwt_qim_embed(const uint8_t *rgba, uint64_t rgba_bytes, uint32_t w
       unsigned bit = bits[i] & 1u;
       int bad = decode(*c, step) != bit;
       wrong += (uint64_t)bad;
-      *c = pass == 0 || bad ? quantise(*c, bit, step) - *c : 0.0;
+      *c = pass == 0 || bad ? quantise(*c, bit, step, &g) - *c : 0.0;
     }
 
     if (pass > 0 && (wrong == 0 || pass == STEGO_DWT_MAX_PASSES)) {

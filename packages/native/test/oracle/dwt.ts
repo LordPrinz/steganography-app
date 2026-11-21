@@ -91,9 +91,16 @@ function decode(value: number, step: number): number {
   return r >= step / 4 && r < (step * 3) / 4 ? 1 : 0;
 }
 
-function quantise(value: number, bit: number, step: number): number {
+/** Nearest lattice point of the bit; LL coefficients stay inside [0, 255 * 2^level]. */
+function quantise(value: number, bit: number, step: number, band: DwtBand, level: number): number {
   const offset = bit ? step / 2 : 0;
-  return Math.floor((value - offset) / step + 0.5) * step + offset;
+  let q = Math.floor((value - offset) / step + 0.5) * step + offset;
+  if (band === "LL") {
+    const highest = 255 * 2 ** level;
+    if (q > highest && q - step >= 0) q -= step;
+    if (q < 0 && q + step <= highest) q += step;
+  }
+  return q;
 }
 
 export function dwtQimExtractOracle(image: RgbaPixels, params: DwtQimParams, bitCount: number) {
@@ -129,7 +136,8 @@ export function dwtQimEmbedOracle(image: RgbaPixels, params: DwtQimParams, bits:
       const bad = decode(plane[at] as number, step) !== bit;
       if (bad) wrong++;
       if (pass === 0 || bad)
-        change[at] = quantise(plane[at] as number, bit, step) - (plane[at] as number);
+        change[at] =
+          quantise(plane[at] as number, bit, step, params.band, level) - (plane[at] as number);
     });
     if (pass > 0 && (wrong === 0 || pass === MAX_PASSES)) {
       failed = wrong;

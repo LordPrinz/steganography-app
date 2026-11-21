@@ -36,9 +36,23 @@ describe("dwtQim", () => {
     expect(reveal(stego, dwtQim({ band: "HL", level: 1, step: 24 })).ok).toBe(false);
   });
 
-  test("embed throws when a bit cannot survive rounding to 8 bits", () => {
-    const method = dwtQim({ band: "LL", level: 3, step: 1 });
-    const bits = Uint8Array.from(noiseImage(64, 1).data.subarray(0, 64), (byte) => byte & 1);
-    expect(() => method.embed(noiseImage(64, 64), bits)).toThrow("cannot survive");
+  test("rejects a step at or below 2^(level + 1)", () => {
+    expect(() => dwtQim({ band: "LL", level: 2, step: 8 })).toThrow(RangeError);
+    expect(() => dwtQim({ band: "LL", level: 1, step: 4 })).toThrow(RangeError);
+    expect(() => dwtQim({ band: "LL", level: 2, step: 9 })).not.toThrow();
+  });
+
+  test.each([0, 255, 253])("embeds into a flat cover of %i", (value) => {
+    const cover = {
+      width: 128,
+      height: 128,
+      data: new Uint8ClampedArray(128 * 128 * 4).fill(value),
+    };
+    for (let i = 3; i < cover.data.length; i += 4) cover.data[i] = 255;
+    const method = dwtQim({ band: "LL", level: 1, step: 48 });
+    expect(reveal(hide(cover, "hello world", method), method)).toEqual({
+      ok: true,
+      message: "hello world",
+    });
   });
 });

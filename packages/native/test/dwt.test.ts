@@ -64,24 +64,54 @@ describe("dwtQimEmbed / dwtQimExtract", () => {
     }
   });
 
-  test("recovers bits from all-black and all-white images", () => {
-    for (const value of [0, 255]) {
-      const cover = {
-        width: 16,
-        height: 16,
-        data: new Uint8ClampedArray(16 * 16 * 4).fill(value),
-      };
+  test("recovers bits from flat black, white and near-saturated covers at every step above the bound", () => {
+    const lumas = [0, 1, 5, 20, 235, 245, 250, 252, 253, 254, 255];
+    const steps = [12, 16, 24, 32, 48, 64, 96];
+    for (const band of ALL_BANDS) {
+      for (const level of [1, 2, 3]) {
+        const bits = randomBits(Math.min(256, dwtQimCapacityBits(128, 128, level)), 7);
+        for (const step of steps.filter((s) => s > 2 ** (level + 1))) {
+          for (const luma of lumas) {
+            const data = new Uint8ClampedArray(128 * 128 * 4).fill(luma);
+            for (let i = 3; i < data.length; i += 4) data[i] = 255;
+            const p = params(band, level, step);
+            const { image: stego, failed } = dwtQimEmbed(
+              { width: 128, height: 128, data },
+              p,
+              bits,
+            );
+            expect({ band, level, step, luma, failed }).toEqual({
+              band,
+              level,
+              step,
+              luma,
+              failed: 0,
+            });
+            expect(dwtQimExtract(stego, p, bits.length)).toEqual(bits);
+          }
+        }
+      }
+    }
+  });
+
+  test("random near-saturated covers round-trip too", () => {
+    for (const [low, span] of [
+      [235, 20],
+      [0, 20],
+    ] as const) {
+      const noise = randomBytes(64 * 64 * 4, low + 1);
+      const data = Uint8ClampedArray.from(noise, (b, i) => (i % 4 === 3 ? 255 : low + (b % span)));
       for (const band of ALL_BANDS) {
         const p = params(band, 1, 24);
-        const bits = randomBits(dwtQimCapacityBits(16, 16, 1), 7);
-        const { image: stego, failed } = dwtQimEmbed(cover, p, bits);
+        const bits = randomBits(dwtQimCapacityBits(64, 64, 1), 9);
+        const { image: stego, failed } = dwtQimEmbed({ width: 64, height: 64, data }, p, bits);
         expect(failed).toBe(0);
         expect(dwtQimExtract(stego, p, bits.length)).toEqual(bits);
       }
     }
   });
 
-  test("reports bits that cannot survive when the step is below the rounding noise", () => {
+  test("counts the bits that cannot survive when the step is at or below 2^(level + 1)", () => {
     const cover = image(32, 32);
     const p = params("LL", 3, 1);
     const bits = randomBits(dwtQimCapacityBits(32, 32, 3));

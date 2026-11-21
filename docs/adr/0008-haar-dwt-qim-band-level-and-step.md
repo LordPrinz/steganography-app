@@ -23,12 +23,19 @@ parameters to recommend.
 - QIM with step d: bit 0 sits on multiples of d, bit 1 on multiples of d plus d / 2. Reading takes the
   nearer lattice, so an error below d / 4 is harmless.
 - Exact round trip: the change of each pixel's luminance is rounded to an integer and added to R, G
-  and B, then clamped to 0..255. Rounding alone moves a level-L coefficient by at most 2^L / 2, so a
-  step above 2^(level + 1) is always safe. Clamping near black and white can cost more. The embedder
-  therefore reads the result back exactly as the extractor does and moves each coefficient that
-  decodes wrongly again, up to 16 rounds. Bits that still fail are counted in `failed`, and the
-  method throws instead of returning an image that would not round-trip. Failures only showed up
-  with steps below the rounding noise (for example step 1 at level 3).
+  and B, then clamped to 0..255. Rounding moves a level-L coefficient by at most 2^L / 2, which
+  stays below the d / 4 tolerance only when d > 2^(level + 1), so `dwtQim` rejects smaller steps.
+  That bound covers rounding, not clamping. Near black and white a change cannot be applied in
+  full, so the embedder reads the result back exactly as the extractor does and moves each
+  coefficient that decodes wrongly again, up to 16 rounds. An LL coefficient can only lie in
+  [0, 255 * 2^level], so its target is the nearest lattice point of the bit inside that range
+  (an unreachable point just outside it caused failures on flat white covers in the first version).
+  Bits that still fail are counted in `failed`, and the method throws instead of returning an image
+  that would not round-trip.
+- What is guaranteed: nothing is proven for every image. Tests embed and read back flat covers
+  (luma 0, 1, 5, 20, 235 to 255), random covers near black and white and noise, for all three bands,
+  levels 1 to 3 and the steps 12 to 96 of the table below that exceed 2^(level + 1), and none failed.
+  Steps at or below the bound fail on many covers (for example step 1 at level 3 on noise).
 - Alpha is never touched.
 
 ## Bench
