@@ -6,12 +6,24 @@ import { describeMethodContract } from "../testing/method-contract.ts";
 import { MethodId } from "../types.ts";
 import { dwtQim } from "./dwt-qim.ts";
 
-// Level 1 runs in the shared suites (testing/methods.ts); deeper levels have too little capacity
-// for the codec suite's large image.
+// Level 1 runs in the shared suites (testing/methods.ts); deeper levels get the contract suite here.
+const coverSize = { width: 128, height: 128 };
 describeMethodContract([
-  { name: "dwt-qim LL level 2, step 32", method: dwtQim({ band: "LL", level: 2, step: 32 }) },
-  { name: "dwt-qim HL level 2, step 32", method: dwtQim({ band: "HL", level: 2, step: 32 }) },
-  { name: "dwt-qim LH level 3, step 48", method: dwtQim({ band: "LH", level: 3, step: 48 }) },
+  {
+    name: "dwt-qim LL level 2, step 32",
+    method: dwtQim({ band: "LL", level: 2, step: 32 }),
+    coverSize,
+  },
+  {
+    name: "dwt-qim HL level 2, step 32",
+    method: dwtQim({ band: "HL", level: 2, step: 32 }),
+    coverSize,
+  },
+  {
+    name: "dwt-qim LH level 3, step 48",
+    method: dwtQim({ band: "LH", level: 3, step: 48 }),
+    coverSize,
+  },
 ]);
 
 describe("dwtQim", () => {

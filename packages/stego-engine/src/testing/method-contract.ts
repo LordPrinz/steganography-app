@@ -5,6 +5,8 @@ import { noiseImage } from "./images.ts";
 export interface MethodCase {
   readonly name: string;
   readonly method: ConfiguredMethod;
+  /** Size of the noise cover the suites use; the default fits at least a frame of LSB or ECC bits. */
+  readonly coverSize?: { readonly width: number; readonly height: number };
 }
 
 function randomBits(count: number): Uint8Array {
@@ -16,8 +18,8 @@ function randomBits(count: number): Uint8Array {
  * Run it for every method: `describeMethodContract(cases)`.
  */
 export function describeMethodContract(cases: readonly MethodCase[]): void {
-  describe.each(cases)("method contract: $name", ({ method }) => {
-    const cover = noiseImage(37, 23);
+  describe.each(cases)("method contract: $name", ({ method, coverSize }) => {
+    const cover = noiseImage(coverSize?.width ?? 37, coverSize?.height ?? 23);
     const capacity = method.capacityBits(cover.width, cover.height);
 
     test("round-trips exactly capacityBits bits", () => {
@@ -33,7 +35,7 @@ export function describeMethodContract(cases: readonly MethodCase[]): void {
     test("extract(n) is a prefix of extract(m)", () => {
       const stego = method.embed(cover, randomBits(capacity));
       const all = method.extract(stego, capacity);
-      for (const n of [0, 1, 64, Math.floor(capacity / 2)].filter((n) => n <= capacity)) {
+      for (const n of [0, 1, 64, Math.floor(capacity / 2)]) {
         expect(method.extract(stego, n)).toEqual(all.subarray(0, n));
       }
     });

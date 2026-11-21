@@ -36,8 +36,18 @@ function otherId(method: ConfiguredMethod): MethodId {
   return method.id === MethodId.Lsb ? MethodId.DwtQim : MethodId.Lsb;
 }
 
-describe.each(methodCases)("stego codec: $name", ({ method }) => {
-  const cover = noiseImage(64, 48);
+test("at least one registered method holds MAX_MESSAGE_BYTES in a 512 x 512 image", () => {
+  // Guards the `test.if(holdsLimit)` cases below: they must not all be skipped silently.
+  const large = noiseImage(512, 512);
+  expect(
+    methodCases.some(
+      ({ method }) => capacity(large.width, large.height, method) > MAX_MESSAGE_BYTES,
+    ),
+  ).toBe(true);
+});
+
+describe.each(methodCases)("stego codec: $name", ({ method, coverSize }) => {
+  const cover = noiseImage(coverSize?.width ?? 64, coverSize?.height ?? 48);
 
   describe("hide and reveal", () => {
     test.each([
@@ -182,20 +192,21 @@ describe.each(methodCases)("stego codec: $name", ({ method }) => {
   });
 
   describe("message length limit", () => {
-    // Low-rate methods need a larger image to hold the limit.
-    const side = capacity(512, 512, method) > MAX_MESSAGE_BYTES ? 512 : 2048;
-    const large = noiseImage(side, side);
+    const large = noiseImage(512, 512);
+    // A method that cannot hold MAX_MESSAGE_BYTES in a 512 x 512 image (DCT: one bit per block) has
+    // nothing to cut off; its forged-frame case below still runs.
+    const holdsLimit = capacity(large.width, large.height, method) > MAX_MESSAGE_BYTES;
 
-    test("the image holds more than the limit", () => {
+    test.if(holdsLimit)("the image holds more than the limit", () => {
       expect(capacity(large.width, large.height, method)).toBeGreaterThan(MAX_MESSAGE_BYTES);
     });
 
-    test("round-trips a message of exactly MAX_MESSAGE_BYTES", () => {
+    test.if(holdsLimit)("round-trips a message of exactly MAX_MESSAGE_BYTES", () => {
       const message = "x".repeat(MAX_MESSAGE_BYTES);
       expect(reveal(hide(large, message, method), method)).toEqual({ ok: true, message });
     });
 
-    test("rejects a longer message although it would fit the image", () => {
+    test.if(holdsLimit)("rejects a longer message although it would fit the image", () => {
       expect(() => hide(large, "x".repeat(MAX_MESSAGE_BYTES + 1), method)).toThrow(
         expect.objectContaining({ needed: MAX_MESSAGE_BYTES + 1, available: MAX_MESSAGE_BYTES }),
       );
@@ -203,7 +214,14 @@ describe.each(methodCases)("stego codec: $name", ({ method }) => {
 
     test("a forged longer frame is corrupted and only its header is read", () => {
       const frame = encodeFrame(method.id, new Uint8Array(MAX_MESSAGE_BYTES + 1));
-      const stego = method.embed(large, toBits(frame));
+      // Methods that cannot hold the whole forged frame still get its header, which is all
+      // `reveal` may read before it rejects the length.
+      const bits = toBits(frame);
+      const fitting = bits.subarray(
+        0,
+        Math.min(bits.length, method.capacityBits(large.width, large.height)),
+      );
+      const stego = method.embed(large, fitting);
       const reads: number[] = [];
       const spy: ConfiguredMethod = {
         ...withId(method, method.id),

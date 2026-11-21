@@ -63,6 +63,14 @@ Haar DWT + QIM (`dwtQim({ band, level, step })`) hides one bit per coefficient o
 It reads the image back during embedding and moves again any bit that rounding or clamping would flip.
 The step must exceed 2^(level + 1). Recommended: LL, level 2, step 32. See ADR 8.
 
+Koch–Zhao embeds one bit per whole 8 × 8 block of Y by pushing the magnitudes of two DCT coefficients at
+least P apart. The pair is (3,2) vs (2,3) and P is 40, chosen from measurements on natural images: the
+default survives JPEG quality 75, and quality 50 with Hamming(7,4). Embedding checks every block the way
+extraction reads it and retries with a larger margin when rounding or clipping spoils it, so the round
+trip is exact. See ADR 7.
+
+Engine source stays free of I/O, but its tests and benches may read fixture images from disk, using the `image-io` dev dependency (benches will move to the ST-14 bench CLI later).
+
 ### Decoding after resizing
 
 Resizing breaks the 8×8 / wavelet grid. The lab uses **non-blind** decoding for resize scenarios: the
