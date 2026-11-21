@@ -59,6 +59,10 @@ DCT and DWT embed in luminance (Y of YCbCr): JPEG keeps luma at full resolution 
 Rounding / clipping to 0–255 after the inverse transform can flip bits even without an attack, so every
 method's round-trip test without attacks must recover the payload exactly.
 
+Haar DWT + QIM (`dwtQim({ band, level, step })`) hides one bit per coefficient of one band at one level.
+It reads the image back during embedding and moves again any bit that rounding or clamping would flip.
+The step must exceed 2^(level + 1). Recommended: LL, level 2, step 32. See ADR 8.
+
 Koch–Zhao embeds one bit per whole 8 × 8 block of Y by pushing the magnitudes of two DCT coefficients at
 least P apart. The pair is (3,2) vs (2,3) and P is 40, chosen from measurements on natural images: the
 default survives JPEG quality 75, and quality 50 with Hamming(7,4). Embedding checks every block the way

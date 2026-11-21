@@ -124,6 +124,36 @@ int32_t stego_luma_ssim(const uint8_t *a, uint64_t a_bytes, const uint8_t *b, ui
 int32_t stego_bit_errors(const uint8_t *a, uint64_t a_bytes, const uint8_t *b, uint64_t b_bytes,
                          uint64_t *errors, uint64_t errors_bytes);
 
+/* Bands of the Haar DWT that carry QIM bits: low-pass, horizontal detail, vertical detail. */
+#define STEGO_DWT_LL 0u
+#define STEGO_DWT_HL 1u
+#define STEGO_DWT_LH 2u
+/* Deepest level accepted by the DWT kernels. */
+#define STEGO_DWT_MAX_LEVEL 8u
+/* Verify-and-correct rounds the embedder runs after its first pass. */
+#define STEGO_DWT_MAX_PASSES 16u
+
+/*
+ * Copies rgba to out and hides bits (one per byte, lowest bit used) in the Haar DWT of the
+ * luminance: one bit per coefficient of the given band at the given level, quantised with step.
+ * Coefficients are taken in row-major order of the band. bit_count may be at most
+ * (width >> level) * (height >> level); pixels outside the region whose sides are multiples of
+ * 2^level are copied unchanged, and so is alpha. plane holds width * height doubles and scratch
+ * max(width, height) doubles (both are overwritten). *failed receives the number of bits that
+ * still decode wrongly after rounding and clamping back to 8 bits were corrected for.
+ */
+int32_t stego_dwt_qim_embed(const uint8_t *rgba, uint64_t rgba_bytes, uint32_t width,
+                            uint32_t height, uint32_t band, uint32_t level, double step,
+                            const uint8_t *bits, uint64_t bit_count, double *plane,
+                            uint64_t plane_bytes, double *scratch, uint64_t scratch_bytes,
+                            uint8_t *out, uint64_t out_bytes, uint64_t *failed,
+                            uint64_t failed_bytes);
+
+/* Reads the first bit_count bits written by stego_dwt_qim_embed, one per byte (0 or 1). */
+int32_t stego_dwt_qim_extract(const uint8_t *rgba, uint64_t rgba_bytes, uint32_t width,
+                              uint32_t height, uint32_t band, uint32_t level, double step,
+                              double *plane, uint64_t plane_bytes, double *scratch,
+                              uint64_t scratch_bytes, uint8_t *bits, uint64_t bit_count);
 /* Largest strength accepted by stego_dct_embed. */
 #define STEGO_DCT_MAX_STRENGTH 1024.0
 /* How many times stego_dct_embed doubles a block's margin after a failed check. */

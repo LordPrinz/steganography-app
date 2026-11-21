@@ -21,6 +21,7 @@
     "native:sanitize": "bun packages/native/build.ts --sanitize",
     "bench:koch-zhao": "bun run --filter '@stego/engine' bench:koch-zhao",
     "native:bench": "bun packages/native/bench/color.bench.ts",
+    "engine:bench:dwt": "bun packages/stego-engine/bench/dwt-qim.bench.ts",
     "native:format": "pipx run clang-format==19.1.7 -i packages/native/c/*.c packages/native/c/*.h packages/native/c/test/*.c",
     "check": "biome check .",
     "check:fix": "biome check --write .",

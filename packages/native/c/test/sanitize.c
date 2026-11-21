@@ -462,6 +462,122 @@ static void dct_invalid(void) {
   }
 }
 
+static void dwt_case(uint32_t w, uint32_t h, uint32_t band, uint32_t level) {
+  uint64_t n = (uint64_t)w * h, line = w > h ? w : h;
+  uint64_t capacity = (uint64_t)(w >> level) * (h >> level);
+  uint64_t pb = n * sizeof(double), lb = line * sizeof(double), fb = sizeof(uint64_t);
+  uint8_t *rgba = alloc(n * 4), *out = alloc(n * 4), *bits = alloc(capacity + 1),
+          *read = alloc(capacity + 1);
+  double *plane = alloc(pb), *scratch = alloc(lb);
+  uint64_t *failed = alloc(fb);
+  for (uint64_t i = 0; i < n * 4; i++)
+    rgba[i] = next_byte();
+  for (uint64_t i = 0; i < capacity; i++)
+    bits[i] = next_byte() & 1;
+
+  EXPECT(stego_dwt_qim_embed(rgba, n * 4, w, h, band, level, 40.0, bits, capacity, plane, pb,
+                             scratch, lb, out, n * 4, failed, fb) == STEGO_OK);
+  EXPECT(stego_dwt_qim_extract(out, n * 4, w, h, band, level, 40.0, plane, pb, scratch, lb, read,
+                               capacity) == STEGO_OK);
+  uint64_t wrong = 0;
+  for (uint64_t i = 0; i < capacity; i++)
+    wrong += bits[i] != read[i];
+  EXPECT(wrong == *failed);
+  for (uint64_t i = 3; i < n * 4; i += 4)
+    EXPECT(out[i] == rgba[i]);
+
+  /* Nothing to embed leaves the image alone; NULL bits are fine then. */
+  EXPECT(stego_dwt_qim_embed(rgba, n * 4, w, h, band, level, 40.0, NULL, 0, plane, pb, scratch, lb,
+                             out, n * 4, failed, fb) == STEGO_OK);
+  EXPECT(memcmp(rgba, out, n * 4) == 0 && *failed == 0);
+  EXPECT(stego_dwt_qim_extract(out, n * 4, w, h, band, level, 40.0, plane, pb, scratch, lb, NULL,
+                               0) == STEGO_OK);
+
+  /* Pure white and black saturate every channel; the correction passes must stay in bounds. */
+  for (uint32_t value = 0; value <= 255; value += 255) {
+    memset(rgba, (int)value, n * 4);
+    EXPECT(stego_dwt_qim_embed(rgba, n * 4, w, h, band, level, 8.0, bits, capacity, plane, pb,
+                               scratch, lb, out, n * 4, failed, fb) == STEGO_OK);
+  }
+
+  /* One bit past the capacity and buffers one byte off are rejected before any access. */
+  EXPECT(stego_dwt_qim_embed(rgba, n * 4, w, h, band, level, 40.0, bits, capacity + 1, plane, pb,
+                             scratch, lb, out, n * 4, failed, fb) == STEGO_E_LENGTH);
+  EXPECT(stego_dwt_qim_extract(out, n * 4, w, h, band, level, 40.0, plane, pb, scratch, lb, read,
+                               capacity + 1) == STEGO_E_LENGTH);
+  EXPECT(stego_dwt_qim_embed(rgba, n * 4 - 1, w, h, band, level, 40.0, bits, 0, plane, pb, scratch,
+                             lb, out, n * 4, failed, fb) == STEGO_E_LENGTH);
+  EXPECT(stego_dwt_qim_embed(rgba, n * 4, w, h, band, level, 40.0, bits, 0, plane, pb - 1, scratch,
+                             lb, out, n * 4, failed, fb) == STEGO_E_LENGTH);
+  EXPECT(stego_dwt_qim_embed(rgba, n * 4, w, h, band, level, 40.0, bits, 0, plane, pb, scratch,
+                             lb + 1, out, n * 4, failed, fb) == STEGO_E_LENGTH);
+  EXPECT(stego_dwt_qim_embed(rgba, n * 4, w, h, band, level, 40.0, bits, 0, plane, pb, scratch, lb,
+                             out, n * 4 + 1, failed, fb) == STEGO_E_LENGTH);
+  EXPECT(stego_dwt_qim_embed(rgba, n * 4, w, h, band, level, 40.0, bits, 0, plane, pb, scratch, lb,
+                             out, n * 4, failed, fb - 1) == STEGO_E_LENGTH);
+  EXPECT(stego_dwt_qim_extract(out, n * 4, w, h, band, level, 40.0, plane, pb, scratch, lb - 1,
+                               read, 0) == STEGO_E_LENGTH);
+
+  free(rgba);
+  free(out);
+  free(bits);
+  free(read);
+  free(plane);
+  free(scratch);
+  free(failed);
+}
+
+static void dwt_invalid(void) {
+  uint8_t rgba[4] = {0}, out[4] = {0}, bits[1] = {0};
+  double plane[1] = {0}, scratch[1] = {0};
+  uint64_t failed = 0;
+#define EMBED(rgba_, w, h, band, level, step, bits_, plane_, scratch_, out_, failed_)              \
+  stego_dwt_qim_embed(rgba_, 4, w, h, band, level, step, bits_, 0, plane_, 8, scratch_, 8, out_,   \
+                      4, failed_, 8)
+
+  EXPECT(EMBED(NULL, 1, 1, 0, 1, 8.0, bits, plane, scratch, out, &failed) == STEGO_E_NULL);
+  EXPECT(EMBED(rgba, 1, 1, 0, 1, 8.0, bits, NULL, scratch, out, &failed) == STEGO_E_NULL);
+  EXPECT(EMBED(rgba, 1, 1, 0, 1, 8.0, bits, plane, NULL, out, &failed) == STEGO_E_NULL);
+  EXPECT(EMBED(rgba, 1, 1, 0, 1, 8.0, bits, plane, scratch, NULL, &failed) == STEGO_E_NULL);
+  EXPECT(EMBED(rgba, 1, 1, 0, 1, 8.0, bits, plane, scratch, out, NULL) == STEGO_E_NULL);
+  EXPECT(stego_dwt_qim_embed(rgba, 4, 1, 1, 0, 1, 8.0, NULL, 1, plane, 8, scratch, 8, out, 4,
+                             &failed, 8) == STEGO_E_NULL);
+  EXPECT(stego_dwt_qim_extract(NULL, 4, 1, 1, 0, 1, 8.0, plane, 8, scratch, 8, bits, 0) ==
+         STEGO_E_NULL);
+  EXPECT(stego_dwt_qim_extract(rgba, 4, 1, 1, 0, 1, 8.0, NULL, 8, scratch, 8, bits, 0) ==
+         STEGO_E_NULL);
+  EXPECT(stego_dwt_qim_extract(rgba, 4, 1, 1, 0, 1, 8.0, plane, 8, NULL, 8, bits, 0) ==
+         STEGO_E_NULL);
+  EXPECT(stego_dwt_qim_extract(rgba, 4, 1, 1, 0, 1, 8.0, plane, 8, scratch, 8, NULL, 1) ==
+         STEGO_E_NULL);
+
+  /* Band, level and step out of range, including NaN and infinity. */
+  static const uint32_t bad_band[] = {STEGO_DWT_LH + 1, UINT32_MAX};
+  static const uint32_t bad_level[] = {0, STEGO_DWT_MAX_LEVEL + 1, UINT32_MAX};
+  static const double bad_step[] = {0.0, -1.0, NAN, INFINITY, -INFINITY, 255.5, 65536.5, 1e300};
+  for (size_t i = 0; i < sizeof bad_band / sizeof bad_band[0]; i++)
+    EXPECT(EMBED(rgba, 1, 1, bad_band[i], 1, 8.0, bits, plane, scratch, out, &failed) ==
+           STEGO_E_ARGUMENT);
+  for (size_t i = 0; i < sizeof bad_level / sizeof bad_level[0]; i++)
+    EXPECT(EMBED(rgba, 1, 1, 0, bad_level[i], 8.0, bits, plane, scratch, out, &failed) ==
+           STEGO_E_ARGUMENT);
+  for (size_t i = 0; i < sizeof bad_step / sizeof bad_step[0]; i++) {
+    EXPECT(EMBED(rgba, 1, 1, 0, 1, bad_step[i], bits, plane, scratch, out, &failed) ==
+           STEGO_E_ARGUMENT);
+    EXPECT(stego_dwt_qim_extract(rgba, 4, 1, 1, 0, 1, bad_step[i], plane, 8, scratch, 8, bits, 0) ==
+           STEGO_E_ARGUMENT);
+  }
+
+  static const uint32_t bad[][2] = {{0, 1}, {1, 0}, {STEGO_MAX_SIDE + 1, 1}, {65536, 65536}};
+  for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+    EXPECT(EMBED(rgba, bad[i][0], bad[i][1], 0, 1, 8.0, bits, plane, scratch, out, &failed) ==
+           STEGO_E_DIMENSIONS);
+    EXPECT(stego_dwt_qim_extract(rgba, 4, bad[i][0], bad[i][1], 0, 1, 8.0, plane, 8, scratch, 8,
+                                 bits, 0) == STEGO_E_DIMENSIONS);
+  }
+#undef EMBED
+}
+
 int main(void) {
   EXPECT(stego_abi_version() == STEGO_ABI_VERSION);
 
@@ -504,6 +620,21 @@ int main(void) {
   metrics_case(11, 11);
   metrics_case(11, 40);
   metrics_invalid();
+
+  /* Every band and level on small shapes (the odd ones leave a remainder); the large images run
+   * the LL band at level 1. */
+  for (uint32_t band = STEGO_DWT_LL; band <= STEGO_DWT_LH; band++)
+    for (uint32_t level = 1; level <= STEGO_DWT_MAX_LEVEL; level++) {
+      dwt_case(1, 1, band, level);
+      dwt_case(3, 5, band, level);
+      dwt_case(37, 23, band, level);
+      dwt_case(64, 40, band, level);
+    }
+  dwt_case(257, 3, STEGO_DWT_HL, 1);
+  for (size_t i = 0; i < sizeof shapes / sizeof shapes[0]; i++) {
+    dwt_case(shapes[i][0], shapes[i][1], STEGO_DWT_LL, 1);
+  }
+  dwt_invalid();
 
   if (failures) {
     fprintf(stderr, "sanitize: %d check(s) failed\n", failures);
