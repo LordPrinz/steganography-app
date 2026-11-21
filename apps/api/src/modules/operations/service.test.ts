@@ -146,6 +146,26 @@ describe("remove", () => {
     expect(await kv.get(`op:${row.id}:view`)).toBeNull();
   });
 
+  test("drops the revealed message of a deleted operation", async () => {
+    const row = view({ status: "succeeded" });
+    const { service, handoff } = setup({ rows: [row] });
+    await handoff.putRevealed(row.id, "hidden text");
+    await service.remove(USER, row.id);
+    expect(await handoff.getRevealed(row.id)).toBeNull();
+  });
+
+  test("still deletes when the key-value store is down", async () => {
+    const down: KeyValueStore = {
+      ...createMemoryStore(),
+      del: async () => {
+        throw new Error("redis down");
+      },
+    };
+    const row = view({ status: "succeeded" });
+    const { service } = setup({ rows: [row], kv: down });
+    expect(await service.remove(USER, row.id)).toBe(true);
+  });
+
   test("is false for a missing or foreign operation and leaves the cache alone", async () => {
     const row = view({ status: "succeeded" });
     const { service, kv } = setup({ rows: [row] });

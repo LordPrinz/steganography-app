@@ -79,7 +79,7 @@ export interface OperationServiceDeps {
   images: Pick<ImageRepository, "findOwned">;
   /** Presigns the result image after checking the user owns it. */
   imageUrls: Pick<ImageService, "get">;
-  handoff: Pick<MessageHandoff, "putMessage" | "deleteMessage" | "getRevealed">;
+  handoff: Pick<MessageHandoff, "putMessage" | "deleteMessage" | "getRevealed" | "deleteRevealed">;
   /** Told after each new job committed, so an idle worker picks it up without waiting for its poll. */
   wake: WakePublisher;
   /** Caches finished operations for polling. */
@@ -267,10 +267,15 @@ export function createOperationService({
       const row = await operations.findOwned(userId, id);
       if (!row) return false;
       if (!(await operations.deleteFinishedOwned(userId, id))) throw new OperationActiveError();
-      // A cached view would keep answering for the owner after the row is gone.
-      await kv.del(cacheKey(id)).catch((error) => {
-        log.error("Could not drop a deleted operation from the cache", error);
-      });
+      // The cached view and a revealed message would keep answering for the owner after the row is gone.
+      await Promise.all([
+        kv.del(cacheKey(id)).catch((error) => {
+          log.error("Could not drop a deleted operation from the cache", error);
+        }),
+        handoff.deleteRevealed(id).catch((error) => {
+          log.error("Could not drop the revealed message of a deleted operation", error);
+        }),
+      ]);
       return true;
     },
   };
