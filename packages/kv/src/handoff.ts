@@ -11,7 +11,10 @@ export const REVEALED_TTL_MS = 5 * 60_000;
  * logs (ADR 3). Keys are built from the operation id alone, so no user input reaches a key name.
  */
 export interface MessageHandoff {
-  /** API, inbound: leaves the message for the worker. Rejects one over `MAX_MESSAGE_BYTES`. */
+  /**
+   * API, inbound: leaves the message for the worker. Rejects one over `MAX_MESSAGE_BYTES`. The caller
+   * must first check that the operation belongs to the current user; the id is no authorisation.
+   */
   putMessage(operationId: string, message: string, ttlMs?: number): Promise<void>;
   /** Worker, inbound: null once the message expired or was deleted. */
   getMessage(operationId: string): Promise<string | null>;
@@ -19,7 +22,10 @@ export interface MessageHandoff {
   deleteMessage(operationId: string): Promise<void>;
   /** Worker, outbound: leaves a decoded message for the user to fetch. */
   putRevealed(operationId: string, message: string, ttlMs?: number): Promise<void>;
-  /** API, outbound: null once the revealed message expired. */
+  /**
+   * API, outbound: null once the revealed message expired. The caller must first check that the
+   * operation belongs to the current user; the id is unguessable but no authorisation check.
+   */
   getRevealed(operationId: string): Promise<string | null>;
 }
 
