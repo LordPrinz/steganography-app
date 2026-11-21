@@ -6,22 +6,221 @@ export class ApiRequestError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    /** Seconds from the `Retry-After` header, set on 429 responses. */
+    readonly retryAfterSeconds?: number,
   ) {
     super(message);
   }
 }
 
-/** Fetches a same-origin API route and validates the response against a contract schema. */
-export async function apiGet<T extends z.ZodType>(path: string, schema: T): Promise<z.infer<T>> {
-  const res = await fetch(path, { credentials: "same-origin" });
-  const body: unknown = await res.json().catch(() => null);
-  if (!res.ok) {
-    const parsed = ApiError.safeParse(body);
-    throw new ApiRequestError(
+/** Auth endpoints whose 401 is an answer, not an expired session. */
+const NO_REFRESH_PATHS = new Set([
+  "/api/v1/auth/login",
+  "/api/v1/auth/register",
+  "/api/v1/auth/refresh",
+  "/api/v1/auth/logout",
+]);
+const REFRESH_PATH = "/api/v1/auth/refresh";
+const REFRESH_LOCK = "stego-auth-refresh";
+
+/** When the last refresh finished, shared between tabs, so a tab that waited on the lock can skip its own. */
+export interface RefreshClock {
+  get(): number;
+  set(time: number): void;
+}
+
+export interface ApiClientDeps {
+  fetch: (input: string, init?: RequestInit) => Promise<Response>;
+  locks?: Pick<LockManager, "request">;
+  refreshClock: RefreshClock;
+  now?: () => number;
+}
+
+export interface RequestOptions {
+  /**
+   * Repeat the request once after a successful token refresh. Defaults to true for JSON bodies and
+   * false for FormData, Blob and stream bodies, which cannot be sent twice.
+   */
+  retry?: boolean;
+}
+
+export interface ApiClient {
+  /** Fetches a same-origin API route and validates the response against a contract schema. */
+  get<S extends z.ZodType>(path: string, schema: S, options?: RequestOptions): Promise<z.infer<S>>;
+  /** POSTs a body (JSON unless it is FormData, Blob or a stream). With a schema the response is validated; without one it is ignored. */
+  post<S extends z.ZodType>(
+    path: string,
+    body: unknown,
+    schema: S,
+    options?: RequestOptions,
+  ): Promise<z.infer<S>>;
+  post(path: string, body?: unknown, schema?: undefined, options?: RequestOptions): Promise<void>;
+}
+
+const isRawBody = (body: unknown): body is FormData | Blob | ReadableStream | ArrayBuffer =>
+  body instanceof FormData ||
+  body instanceof Blob ||
+  body instanceof ReadableStream ||
+  body instanceof ArrayBuffer;
+
+type Method = "GET" | "POST";
+
+export function createApiClient({
+  fetch,
+  locks,
+  refreshClock,
+  now = Date.now,
+}: ApiClientDeps): ApiClient {
+  let inflightRefresh: Promise<boolean> | null = null;
+
+  async function send(method: Method, path: string, body?: unknown): Promise<Response> {
+    try {
+      return await fetch(path, {
+        method,
+        credentials: "same-origin",
+        headers:
+          body === undefined || isRawBody(body)
+            ? undefined
+            : { "Content-Type": "application/json" },
+        body:
+          body === undefined || isRawBody(body)
+            ? (body as BodyInit | undefined)
+            : JSON.stringify(body),
+      });
+    } catch {
+      throw new ApiRequestError(0, "network", "Could not reach the server");
+    }
+  }
+
+  async function refreshOnce(startedAt: number): Promise<boolean> {
+    // Another tab refreshed while this one waited for the lock: the cookies are already new.
+    // A stored time in the future is garbage (clock change, tampering) and proves nothing.
+    const last = refreshClock.get();
+    if (last >= startedAt && last <= now()) return true;
+    const res = await send("POST", REFRESH_PATH).catch(() => null);
+    if (!res?.ok) return false;
+    refreshClock.set(now());
+    return true;
+  }
+
+  /** One refresh at a time per tab (shared promise) and per browser (Web Lock). */
+  function refresh(startedAt: number): Promise<boolean> {
+    inflightRefresh ??= (
+      locks
+        ? // The lock can be refused (SecurityError, detached document): refresh without it then.
+          locks
+            .request(REFRESH_LOCK, () => refreshOnce(startedAt))
+            .catch(() => refreshOnce(startedAt))
+        : refreshOnce(startedAt)
+    ).finally(() => {
+      inflightRefresh = null;
+    });
+    return inflightRefresh;
+  }
+
+  async function toError(res: Response): Promise<ApiRequestError> {
+    const parsed = ApiError.safeParse(await res.json().catch(() => null));
+    const retryAfter = Number.parseInt(res.headers.get("Retry-After") ?? "", 10);
+    return new ApiRequestError(
       res.status,
       parsed.success ? parsed.data.error.code : "unknown",
       parsed.success ? parsed.data.error.message : res.statusText,
+      retryAfter > 0 ? retryAfter : undefined,
     );
   }
-  return schema.parse(body);
+
+  async function request(
+    method: Method,
+    path: string,
+    body?: unknown,
+    { retry = !isRawBody(body) }: RequestOptions = {},
+  ): Promise<Response> {
+    const startedAt = now();
+    let res = await send(method, path, body);
+    // A 401 may only mean the short-lived access cookie ran out. Refresh and retry exactly once;
+    // the retry never refreshes again, so a session that is really gone cannot loop.
+    if (res.status === 401 && retry && !NO_REFRESH_PATHS.has(path) && (await refresh(startedAt))) {
+      res = await send(method, path, body);
+    }
+    if (!res.ok) throw await toError(res);
+    return res;
+  }
+
+  return {
+    async get(path, schema, options) {
+      return schema.parse(await (await request("GET", path, undefined, options)).json());
+    },
+    async post(
+      path: string,
+      body?: unknown,
+      schema?: z.ZodType,
+      options?: RequestOptions,
+    ): Promise<never> {
+      const res = await request("POST", path, body, options);
+      return (schema ? schema.parse(await res.json()) : undefined) as never;
+    },
+  };
+}
+
+/** localStorage-backed clock; falls back to this tab's memory when storage is blocked. */
+function browserRefreshClock(): RefreshClock {
+  const key = "stego:refreshed-at";
+  let local = 0;
+  return {
+    get() {
+      try {
+        return Math.max(local, Number(localStorage.getItem(key)) || 0);
+      } catch {
+        return local;
+      }
+    },
+    set(time) {
+      local = time;
+      try {
+        localStorage.setItem(key, String(time));
+      } catch {
+        // Storage blocked: the in-memory value still covers this tab.
+      }
+    },
+  };
+}
+
+let browserClient: ApiClient | undefined;
+
+function client(): ApiClient {
+  browserClient ??= createApiClient({
+    fetch: (...args) => fetch(...args),
+    locks: typeof navigator === "undefined" ? undefined : navigator.locks,
+    refreshClock: browserRefreshClock(),
+  });
+  return browserClient;
+}
+
+export function apiGet<S extends z.ZodType>(
+  path: string,
+  schema: S,
+  options?: RequestOptions,
+): Promise<z.infer<S>> {
+  return client().get(path, schema, options);
+}
+
+export function apiPost<S extends z.ZodType>(
+  path: string,
+  body: unknown,
+  schema: S,
+  options?: RequestOptions,
+): Promise<z.infer<S>>;
+export function apiPost(
+  path: string,
+  body?: unknown,
+  schema?: undefined,
+  options?: RequestOptions,
+): Promise<void>;
+export function apiPost(
+  path: string,
+  body?: unknown,
+  schema?: z.ZodType,
+  options?: RequestOptions,
+): Promise<unknown> {
+  return client().post(path, body, schema as z.ZodType, options);
 }
