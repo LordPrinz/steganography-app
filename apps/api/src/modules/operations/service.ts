@@ -11,7 +11,7 @@ import {
 } from "@stego/contracts";
 import type { ImageRepository, NewOperation, OperationRepository, OperationView } from "@stego/db";
 import { capacity, createMethod, MAX_MESSAGE_BYTES } from "@stego/engine";
-import type { KeyValueStore, MessageHandoff } from "@stego/kv";
+import type { KeyValueStore, MessageHandoff, WakePublisher } from "@stego/kv";
 import { z } from "zod";
 import type { ImageService } from "../images/service.ts";
 
@@ -57,6 +57,8 @@ export interface OperationServiceDeps {
   /** Presigns the result image after checking the user owns it. */
   imageUrls: Pick<ImageService, "get">;
   handoff: Pick<MessageHandoff, "putMessage" | "deleteMessage" | "getRevealed">;
+  /** Told after each new job committed, so an idle worker picks it up without waiting for its poll. */
+  wake: WakePublisher;
   /** Caches finished operations for polling. */
   kv: Pick<KeyValueStore, "get" | "set">;
   maxActive?: number;
@@ -117,6 +119,7 @@ export function createOperationService({
   images,
   imageUrls,
   handoff,
+  wake,
   kv,
   maxActive = MAX_ACTIVE_OPERATIONS_PER_USER,
   cacheTtlMs = DEFAULT_CACHE_TTL_MS,
@@ -148,6 +151,8 @@ export function createOperationService({
         await discard();
         throw new TooManyActiveOperationsError();
       }
+      // After the commit, never inside it: a worker woken early would find no job.
+      await wake.notify();
       return { id, status: row.status };
     } catch (error) {
       if (!(error instanceof TooManyActiveOperationsError)) await discard();

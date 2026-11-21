@@ -4,7 +4,7 @@ import type {
   RefreshTokenRepository,
   UserRepository,
 } from "@stego/db";
-import { createMessageHandoff, type KeyValueStore } from "@stego/kv";
+import { createMessageHandoff, type KeyValueStore, type WakePublisher } from "@stego/kv";
 import type { ObjectStore } from "@stego/storage";
 import { type ConcurrencyLimit, createConcurrencyLimit } from "./lib/concurrency-limit.ts";
 import { requireOrigin } from "./lib/csrf.ts";
@@ -26,6 +26,8 @@ const DECODE_SLOTS = 2;
 export interface ServerDeps {
   port: number;
   kv: KeyValueStore;
+  /** Wakes the worker after a job was enqueued. */
+  wake: WakePublisher;
   storage: Pick<ObjectStore, "ping" | "put" | "delete" | "presignGet">;
   users: UserRepository;
   images: ImageRepository;
@@ -45,6 +47,7 @@ export interface ServerDeps {
 export function createServer({
   port,
   kv,
+  wake,
   storage,
   users,
   images,
@@ -78,6 +81,7 @@ export function createServer({
     images,
     imageUrls: imageService,
     handoff: createMessageHandoff(kv),
+    wake,
     kv,
   });
 

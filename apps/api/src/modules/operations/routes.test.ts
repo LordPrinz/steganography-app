@@ -66,8 +66,7 @@ afterEach(() => {
 
 describe.each(backends)("operations API (%s)", (_name, backend) => {
   async function start(overrides: Partial<ServerDeps> = {}) {
-    const kv = createMemoryStore();
-    const deps = testServerDeps({ ...(await backend()), kv, ...overrides });
+    const deps = testServerDeps({ ...(await backend()), ...overrides });
     const server = createServer(deps);
     servers.push(server);
     const client = async (email: string) => {
@@ -117,7 +116,10 @@ describe.each(backends)("operations API (%s)", (_name, backend) => {
 
     test("fills in default parameters", async () => {
       const { ann, encode } = await start();
-      const res = await encode(ann, { layers: [{ id: "dwt-qim" }] });
+      const res = await encode(ann, {
+        message: "hi",
+        layers: [{ id: "dwt-qim", params: { level: 1 } }],
+      });
       expect(res.status).toBe(202);
     });
 
@@ -190,15 +192,30 @@ describe.each(backends)("operations API (%s)", (_name, backend) => {
     });
 
     test("limits the operations in progress and drops the message of a refused one", async () => {
-      const { ann, encode, handoff } = await start();
+      const base = createMemoryStore();
+      const stored: string[] = [];
+      const removed: string[] = [];
+      const kv = {
+        ...base,
+        set: (key: string, value: string, ttlMs?: number) => {
+          if (key.endsWith(":message")) stored.push(key);
+          return base.set(key, value, ttlMs);
+        },
+        del: (key: string) => {
+          removed.push(key);
+          return base.del(key);
+        },
+      };
+      const { ann, encode } = await start({ kv });
       for (let i = 0; i < 5; i++) expect((await encode(ann)).status).toBe(202);
       const res = await encode(ann);
       expect(res.status).toBe(429);
       expect(await errorCode(res)).toBe("too_many_operations");
       expect(res.headers.get("retry-after")).not.toBeNull();
-      // Only the five accepted operations hold a message.
-      const keys = await Promise.all([...Array(0)].map(() => handoff.getMessage("none")));
-      expect(keys).toEqual([]);
+      // The refused request left a message and removed it again: five stay.
+      expect(stored.length).toBe(6);
+      expect(removed.length).toBe(1);
+      expect(stored.filter((key) => !removed.includes(key))).toHaveLength(5);
     });
 
     test("is rate limited per user", async () => {
