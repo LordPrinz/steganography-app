@@ -373,6 +373,95 @@ static void metrics_invalid(void) {
   }
 }
 
+static void dct_case(uint32_t w, uint32_t h, uint8_t fill) {
+  uint64_t n = (uint64_t)w * h, capacity = (uint64_t)(w / 8) * (h / 8);
+  uint8_t *rgba = alloc(n * 4), *out = alloc(n * 4), *bits = alloc(capacity + 1),
+          *read = alloc(capacity + 1);
+  double *scratch = alloc(STEGO_DCT_SCRATCH_DOUBLES * sizeof(double));
+  uint64_t sb = STEGO_DCT_SCRATCH_DOUBLES * sizeof(double);
+  /* fill 0 and 255 force clipping on every block; anything else is random. */
+  for (uint64_t i = 0; i < n * 4; i++)
+    rgba[i] = fill ? (fill == 1 ? next_byte() : fill) : 0;
+  for (uint64_t i = 0; i < capacity; i++)
+    bits[i] = next_byte() & 1;
+
+  EXPECT(stego_dct_embed(rgba, n * 4, w, h, 4, 1, 3, 2, 25.0, bits, capacity, scratch, sb, out,
+                         n * 4) == STEGO_OK);
+  EXPECT(stego_dct_extract(out, n * 4, w, h, 4, 1, 3, 2, read, capacity, scratch, sb) == STEGO_OK);
+  EXPECT(memcmp(bits, read, capacity) == 0);
+  for (uint64_t i = 3; i < n * 4; i += 4)
+    EXPECT(out[i] == rgba[i]);
+
+  /* Another pair at the corner of the block, and no bits at all. */
+  EXPECT(stego_dct_embed(rgba, n * 4, w, h, 0, 7, 7, 7, 8.0, bits, capacity, scratch, sb, out,
+                         n * 4) == STEGO_OK);
+  EXPECT(stego_dct_extract(out, n * 4, w, h, 0, 7, 7, 7, read, capacity, scratch, sb) == STEGO_OK);
+  EXPECT(memcmp(bits, read, capacity) == 0);
+  EXPECT(stego_dct_embed(rgba, n * 4, w, h, 1, 0, 0, 1, 25.0, NULL, 0, scratch, sb, out, n * 4) ==
+         STEGO_OK);
+  EXPECT(memcmp(rgba, out, n * 4) == 0);
+
+  /* Output overlapping the input is rejected, also when it is shifted by a single byte. */
+  EXPECT(stego_dct_embed(rgba, n * 4, w, h, 4, 1, 3, 2, 25.0, bits, capacity, scratch, sb, rgba,
+                         n * 4) == STEGO_E_ARGUMENT);
+
+  /* One bit past the capacity and buffers one byte off are rejected before any access. */
+  EXPECT(stego_dct_embed(rgba, n * 4, w, h, 4, 1, 3, 2, 25.0, bits, capacity + 1, scratch, sb, out,
+                         n * 4) == STEGO_E_LENGTH);
+  EXPECT(stego_dct_extract(out, n * 4, w, h, 4, 1, 3, 2, read, capacity + 1, scratch, sb) ==
+         STEGO_E_LENGTH);
+  EXPECT(stego_dct_embed(rgba, n * 4, w, h, 4, 1, 3, 2, 25.0, bits, capacity, scratch, sb - 1, out,
+                         n * 4) == STEGO_E_LENGTH);
+  EXPECT(stego_dct_embed(rgba, n * 4, w, h, 4, 1, 3, 2, 25.0, bits, capacity, scratch, sb, out,
+                         n * 4 - 1) == STEGO_E_LENGTH);
+
+  free(rgba);
+  free(out);
+  free(bits);
+  free(read);
+  free(scratch);
+}
+
+static void dct_invalid(void) {
+  uint8_t rgba[8 * 8 * 4] = {0}, out[8 * 8 * 4] = {0}, bits[1] = {0};
+  double scratch[STEGO_DCT_SCRATCH_DOUBLES] = {0};
+  uint64_t sb = sizeof scratch;
+
+#define EMBED(u1, v1, u2, v2, strength)                                                            \
+  stego_dct_embed(rgba, sizeof rgba, 8, 8, u1, v1, u2, v2, strength, bits, 1, scratch, sb, out,    \
+                  sizeof out)
+  EXPECT(EMBED(1, 1, 2, 1, 10.0) == STEGO_OK);
+  EXPECT(EMBED(0, 0, 2, 1, 10.0) == STEGO_E_ARGUMENT);
+  EXPECT(EMBED(1, 1, 0, 0, 10.0) == STEGO_E_ARGUMENT);
+  EXPECT(EMBED(1, 1, 1, 1, 10.0) == STEGO_E_ARGUMENT);
+  EXPECT(EMBED(8, 1, 2, 1, 10.0) == STEGO_E_ARGUMENT);
+  EXPECT(EMBED(1, 8, 2, 1, 10.0) == STEGO_E_ARGUMENT);
+  EXPECT(EMBED(1, 1, 2, 1, 0.0) == STEGO_E_ARGUMENT);
+  EXPECT(EMBED(1, 1, 2, 1, -1.0) == STEGO_E_ARGUMENT);
+  EXPECT(EMBED(1, 1, 2, 1, NAN) == STEGO_E_ARGUMENT);
+  EXPECT(EMBED(1, 1, 2, 1, STEGO_DCT_MAX_STRENGTH + 1.0) == STEGO_E_ARGUMENT);
+#undef EMBED
+
+  EXPECT(stego_dct_embed(NULL, sizeof rgba, 8, 8, 1, 1, 2, 1, 10.0, bits, 1, scratch, sb, out,
+                         sizeof out) == STEGO_E_NULL);
+  EXPECT(stego_dct_embed(rgba, sizeof rgba, 8, 8, 1, 1, 2, 1, 10.0, NULL, 1, scratch, sb, out,
+                         sizeof out) == STEGO_E_NULL);
+  EXPECT(stego_dct_embed(rgba, sizeof rgba, 8, 8, 1, 1, 2, 1, 10.0, bits, 1, NULL, sb, out,
+                         sizeof out) == STEGO_E_NULL);
+  EXPECT(stego_dct_embed(rgba, sizeof rgba, 8, 8, 1, 1, 2, 1, 10.0, bits, 1, scratch, sb, NULL,
+                         sizeof out) == STEGO_E_NULL);
+  EXPECT(stego_dct_extract(rgba, sizeof rgba, 8, 8, 1, 1, 2, 1, NULL, 1, scratch, sb) ==
+         STEGO_E_NULL);
+
+  static const uint32_t bad[][2] = {{0, 1}, {1, 0}, {STEGO_MAX_SIDE + 1, 1}, {65536, 65536}};
+  for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+    EXPECT(stego_dct_embed(rgba, sizeof rgba, bad[i][0], bad[i][1], 1, 1, 2, 1, 10.0, bits, 0,
+                           scratch, sb, out, sizeof out) == STEGO_E_DIMENSIONS);
+    EXPECT(stego_dct_extract(rgba, sizeof rgba, bad[i][0], bad[i][1], 1, 1, 2, 1, bits, 0, scratch,
+                             sb) == STEGO_E_DIMENSIONS);
+  }
+}
+
 int main(void) {
   EXPECT(stego_abi_version() == STEGO_ABI_VERSION);
 
@@ -394,6 +483,13 @@ int main(void) {
     lsb_case(37, 23, k);
   }
   lsb_invalid();
+
+  /* Random pixels, then all black and all white, where every block is clipped. */
+  for (size_t i = 0; i < sizeof shapes / sizeof shapes[0]; i++)
+    dct_case(shapes[i][0], shapes[i][1], 1);
+  dct_case(37, 23, 0);
+  dct_case(37, 23, 255);
+  dct_invalid();
 
   for (size_t i = 0; i < sizeof shapes / sizeof shapes[0]; i++)
     blur_case(shapes[i][0], shapes[i][1], 3);
