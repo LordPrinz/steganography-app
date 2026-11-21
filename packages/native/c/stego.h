@@ -25,6 +25,8 @@ enum {
   STEGO_E_LENGTH = -3,
   /* A scalar argument is out of range (e.g. an unknown mode or parameter value). */
   STEGO_E_ARGUMENT = -4,
+  /* A DCT block could not be made to hold its bit, even with the largest margin tried. */
+  STEGO_E_EMBED = -5,
 };
 
 /* Longest accepted side; leaves room for non-square images within the pixel limit. */
@@ -121,5 +123,31 @@ int32_t stego_luma_ssim(const uint8_t *a, uint64_t a_bytes, const uint8_t *b, ui
 /* Counts positions where the lowest bits of a and b differ (one bit per byte, equal lengths). */
 int32_t stego_bit_errors(const uint8_t *a, uint64_t a_bytes, const uint8_t *b, uint64_t b_bytes,
                          uint64_t *errors, uint64_t errors_bytes);
+
+/* Largest strength accepted by stego_dct_embed. */
+#define STEGO_DCT_MAX_STRENGTH 1024.0
+/* How many times stego_dct_embed doubles a block's margin after a failed check. */
+#define STEGO_DCT_ATTEMPTS 6u
+/* Doubles in the DCT scratch buffer: the basis functions of the two coefficients, 64 each. */
+#define STEGO_DCT_SCRATCH_DOUBLES 128u
+
+/*
+ * Koch-Zhao: embeds bits[i] (lowest bit) in 8 x 8 luminance block i, row-major, by making the
+ * magnitudes of the DCT coefficients (u1, v1) and (u2, v2) differ by at least strength, the larger
+ * being the first for a 1. Frequencies are 0..7 (u horizontal, v vertical), the two positions
+ * differ and neither is DC. bit_count may be at most (width / 8) * (height / 8); pixels outside
+ * whole blocks and the alpha channel are copied. Returns STEGO_E_EMBED when a block cannot hold its
+ * bit. scratch holds STEGO_DCT_SCRATCH_DOUBLES doubles. out must not overlap rgba
+ * (STEGO_E_ARGUMENT).
+ */
+int32_t stego_dct_embed(const uint8_t *rgba, uint64_t rgba_bytes, uint32_t width, uint32_t height,
+                        uint32_t u1, uint32_t v1, uint32_t u2, uint32_t v2, double strength,
+                        const uint8_t *bits, uint64_t bit_count, double *scratch,
+                        uint64_t scratch_bytes, uint8_t *out, uint64_t out_bytes);
+
+/* Reads the first bit_count bits written by stego_dct_embed, one per byte (0 or 1). */
+int32_t stego_dct_extract(const uint8_t *rgba, uint64_t rgba_bytes, uint32_t width, uint32_t height,
+                          uint32_t u1, uint32_t v1, uint32_t u2, uint32_t v2, uint8_t *bits,
+                          uint64_t bit_count, double *scratch, uint64_t scratch_bytes);
 
 #endif
