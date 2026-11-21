@@ -10,6 +10,8 @@ export interface RateLimitOptions {
 
 export interface RateLimitResult {
   allowed: boolean;
+  /** Requests counted in the current window, including this one for `hit`. */
+  count: number;
   remaining: number;
   /** 0 when allowed; otherwise how long until the window resets (for `Retry-After`). */
   retryAfterMs: number;
@@ -18,6 +20,11 @@ export interface RateLimitResult {
 export interface RateLimiter {
   /** Counts one request for `id` (an IP, an e-mail…) and says whether it may proceed. */
   hit(id: string): Promise<RateLimitResult>;
+  /**
+   * Says whether `id` is over the limit without counting a request, for limits that count only
+   * failures. Retry-After is then the full window, an upper bound: the store does not expose the TTL.
+   */
+  peek(id: string): Promise<RateLimitResult>;
 }
 
 // SHA-256 keeps keys a fixed size whatever the caller sends, and keeps e-mails and IPs out of Redis.
@@ -37,14 +44,27 @@ export function createRateLimiter(
   }
   assertTtl(windowMs);
 
+  const key = (id: string) => `ratelimit:${name}:${digest(id)}`;
+
   return {
     async hit(id) {
-      const { count, ttlMs } = await store.increment(`ratelimit:${name}:${digest(id)}`, windowMs);
+      const { count, ttlMs } = await store.increment(key(id), windowMs);
       const allowed = count <= limit;
       return {
         allowed,
+        count,
         remaining: Math.max(0, limit - count),
         retryAfterMs: allowed ? 0 : Math.max(0, ttlMs),
+      };
+    },
+    async peek(id) {
+      const count = Number((await store.get(key(id))) ?? 0);
+      const allowed = count < limit;
+      return {
+        allowed,
+        count,
+        remaining: Math.max(0, limit - count),
+        retryAfterMs: allowed ? 0 : windowMs,
       };
     },
   };

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import type { SQL } from "bun";
 import { backoffMs, createJobQueue, enqueueJob, JobError } from "./jobs.ts";
-import { createTestDatabase } from "./testing.ts";
+import { createTestDatabase } from "./testing/index.ts";
 import type { JobRow, OperationRow } from "./types.ts";
 
 // Several connections, so concurrent claims really run in parallel.

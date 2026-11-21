@@ -1,0 +1,13 @@
+# Front door for the web app. The API trusts X-Client-IP only from TRUSTED_PROXIES (the Next server),
+# and Next passes on whatever it receives, so this proxy must be the only way in: it overwrites any
+# client-sent X-Client-IP with the address of the TCP connection.
+{
+	admin off
+	auto_https off
+}
+
+:8080 {
+	reverse_proxy {$WEB_UPSTREAM:host.docker.internal:3000} {
+		header_up X-Client-IP {remote_host}
+	}
+}
