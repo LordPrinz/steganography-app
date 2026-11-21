@@ -42,7 +42,7 @@ parameters to recommend.
 
 ## Bench
 
-`bun run engine:bench:dwt` embeds 4096 random bits into three generated 512 x 512 images (smooth,
+`bun run bench --preset dwt-qim` embeds 4096 random bits into three generated 512 x 512 images (smooth,
 textured, edges), averages PSNR (luminance) and BER, and attacks the stego image with JPEG at
 quality 90, 75 and 50. Apple M3 Max, Bun 1.4.4.
 

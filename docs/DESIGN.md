@@ -69,7 +69,7 @@ default survives JPEG quality 75, and quality 50 with Hamming(7,4). Embedding ch
 extraction reads it and retries with a larger margin when rounding or clipping spoils it, so the round
 trip is exact. See ADR 7.
 
-Engine source stays free of I/O, but its tests and benches may read fixture images from disk, using the `image-io` dev dependency (benches will move to the ST-14 bench CLI later).
+Engine source and tests stay free of I/O. Experiments that need image files or attacks live in the bench CLI (`tools/bench`), which depends on engine, `image-io` and `contracts`; its fixtures are in `tools/bench/images`.
 
 ### Decoding after resizing
 
