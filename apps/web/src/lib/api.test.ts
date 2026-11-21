@@ -14,13 +14,12 @@ type Handler = (path: string, call: number) => Response | Promise<Response>;
 function setup(handler: Handler, opts: { locks?: boolean } = {}) {
   const calls: string[] = [];
   const counts = new Map<string, number>();
-  const fetchFn = (async (input: RequestInfo | URL) => {
-    const path = String(input);
+  const fetchFn = async (path: string) => {
     calls.push(path);
     const call = (counts.get(path) ?? 0) + 1;
     counts.set(path, call);
     return handler(path, call);
-  }) as typeof fetch;
+  };
 
   let time = 0;
   let refreshedAt = 0;
@@ -92,7 +91,7 @@ describe("api client", () => {
   });
 
   test("throws the original 401 when the refresh is refused", async () => {
-    const { client, calls } = setup((path) => (path === REFRESH ? unauthorized() : unauthorized()));
+    const { client, calls } = setup(() => unauthorized());
     const error = await client.get("/api/v1/thing", Thing).catch((e) => e);
     expect(error).toMatchObject({ status: 401, code: "unauthorized" });
     expect(calls).toEqual(["/api/v1/thing", REFRESH]);
@@ -132,26 +131,68 @@ describe("api client", () => {
   });
 
   test("skips the refresh when another tab refreshed after the request started", async () => {
-    const time = 0;
+    let clock = 100;
     let refreshedAt = 0;
     const calls: string[] = [];
-    let first = true;
     const client = createApiClient({
-      fetch: (async (input: RequestInfo | URL) => {
-        calls.push(String(input));
-        if (first) {
-          first = false;
-          // Another tab finishes its refresh while this response is in flight.
-          refreshedAt = time + 1;
-          return unauthorized();
-        }
-        return Response.json({ n: 1 });
-      }) as typeof fetch,
+      fetch: async (path) => {
+        calls.push(path);
+        if (calls.length > 1) return Response.json({ n: 1 });
+        // Another tab finishes its refresh while this response is in flight.
+        clock = 150;
+        refreshedAt = 150;
+        return unauthorized();
+      },
       refreshClock: { get: () => refreshedAt, set: (t) => (refreshedAt = t) },
-      now: () => time,
+      now: () => clock,
     });
     expect(await client.get("/api/v1/thing", Thing)).toEqual({ n: 1 });
     expect(calls).toEqual(["/api/v1/thing", "/api/v1/thing"]);
+  });
+
+  test("ignores a stored refresh time in the future", async () => {
+    const calls: string[] = [];
+    const client = createApiClient({
+      fetch: async (path) => {
+        calls.push(path);
+        if (path === REFRESH) return new Response(null, { status: 200 });
+        return calls.length === 1 ? unauthorized() : Response.json({ n: 1 });
+      },
+      refreshClock: { get: () => 9_999, set: () => {} },
+      now: () => 100,
+    });
+    await client.get("/api/v1/thing", Thing);
+    expect(calls).toContain(REFRESH);
+  });
+
+  test("refreshes without the lock when the lock request fails", async () => {
+    const calls: string[] = [];
+    const client = createApiClient({
+      fetch: async (path) => {
+        calls.push(path);
+        if (path === REFRESH) return new Response(null, { status: 200 });
+        return calls.length === 1 ? unauthorized() : Response.json({ n: 1 });
+      },
+      locks: {
+        request: (async () => Promise.reject(new DOMException("denied", "SecurityError"))) as never,
+      },
+      refreshClock: { get: () => 0, set: () => {} },
+      now: () => 100,
+    });
+    expect(await client.get("/api/v1/thing", Thing)).toEqual({ n: 1 });
+    expect(calls).toEqual(["/api/v1/thing", REFRESH, "/api/v1/thing"]);
+  });
+
+  test("retry: false returns the 401 without refreshing", async () => {
+    const { client, calls } = setup(() => unauthorized());
+    await client.get("/api/v1/thing", Thing, { retry: false }).catch(() => undefined);
+    expect(calls).toEqual(["/api/v1/thing"]);
+  });
+
+  test("does not replay FormData bodies", async () => {
+    const { client, calls } = setup(() => unauthorized());
+    await client.post("/api/v1/images", new FormData()).catch(() => undefined);
+    expect(calls).toEqual(["/api/v1/images"]);
   });
 
   test("post without a schema resolves to undefined on 204", async () => {

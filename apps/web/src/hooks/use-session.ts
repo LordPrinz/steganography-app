@@ -1,10 +1,19 @@
 "use client";
 
 import { AuthResponse, type AuthUser } from "@stego/contracts";
-import { useQuery } from "@tanstack/react-query";
+import { type QueryClient, useQuery } from "@tanstack/react-query";
 import { ApiRequestError, apiGet } from "@/lib/api.ts";
 
 export const SESSION_KEY = ["session"] as const;
+
+/**
+ * Switches the cached session. Everything else cached belongs to the previous user (or to nobody),
+ * so it is dropped first; otherwise the next user in this tab could see it.
+ */
+export function replaceSession(queryClient: QueryClient, user: AuthUser | null): void {
+  queryClient.clear();
+  queryClient.setQueryData(SESSION_KEY, user);
+}
 
 /** The signed-in user: `undefined` while loading, `null` when signed out. */
 export function useSession() {

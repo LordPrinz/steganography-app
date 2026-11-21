@@ -13,7 +13,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu.tsx";
 import { Skeleton } from "@/components/ui/skeleton.tsx";
-import { SESSION_KEY, useSession } from "@/hooks/use-session.ts";
+import { replaceSession, useSession } from "@/hooks/use-session.ts";
 import { apiPost } from "@/lib/api.ts";
 
 export function UserMenu() {
@@ -24,8 +24,7 @@ export function UserMenu() {
     mutationFn: () => apiPost("/api/v1/auth/logout"),
     // Even if the request failed the cookies may be gone. Dropping the session sends guarded pages to sign-in.
     onSettled: () => {
-      queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== SESSION_KEY[0] });
-      queryClient.setQueryData(SESSION_KEY, null);
+      replaceSession(queryClient, null);
     },
   });
 

@@ -22,8 +22,7 @@
     "paths": {
       "@/*": ["./src/*"]
     },
-    "allowJs": true,
-    "types": ["node", "bun"]
+    "allowJs": true
   },
   "include": [
     "next-env.d.ts",
@@ -32,5 +31,5 @@
     "next.config.ts",
     ".next/dev/types/**/*.ts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "src/**/*.test.ts"]
 }

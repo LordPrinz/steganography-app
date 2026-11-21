@@ -19,12 +19,6 @@ describe("authErrorMessage", () => {
     expect(message).toContain("If you already have an account");
   });
 
-  test("409 points to sign-in", () => {
-    expect(authErrorMessage(new ApiRequestError(409, "conflict", ""), "sign-up")).toContain(
-      "Sign in",
-    );
-  });
-
   test("429 shows the Retry-After wait", () => {
     expect(authErrorMessage(new ApiRequestError(429, "rate_limited", "", 90), "sign-in")).toBe(
       "Too many attempts. Try again in 2 minutes.",

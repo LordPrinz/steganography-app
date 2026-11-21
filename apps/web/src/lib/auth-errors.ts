@@ -24,8 +24,6 @@ export function authErrorMessage(error: unknown, action: AuthAction): string {
         return action === "sign-up"
           ? "Your account could not be opened with these details. If you already have an account, sign in with its password."
           : "Invalid e-mail or password.";
-      case 409:
-        return "An account with this e-mail already exists. Sign in instead.";
       case 429:
         return error.retryAfterSeconds
           ? `Too many attempts. Try again in ${formatWait(error.retryAfterSeconds)}.`

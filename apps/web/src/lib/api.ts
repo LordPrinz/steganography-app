@@ -36,13 +36,32 @@ export interface ApiClientDeps {
   now?: () => number;
 }
 
+export interface RequestOptions {
+  /**
+   * Repeat the request once after a successful token refresh. Defaults to true for JSON bodies and
+   * false for FormData, Blob and stream bodies, which cannot be sent twice.
+   */
+  retry?: boolean;
+}
+
 export interface ApiClient {
   /** Fetches a same-origin API route and validates the response against a contract schema. */
-  get<S extends z.ZodType>(path: string, schema: S): Promise<z.infer<S>>;
-  /** POSTs JSON. With a schema the response is validated; without one the body is ignored. */
-  post<S extends z.ZodType>(path: string, body: unknown, schema: S): Promise<z.infer<S>>;
-  post(path: string, body?: unknown): Promise<void>;
+  get<S extends z.ZodType>(path: string, schema: S, options?: RequestOptions): Promise<z.infer<S>>;
+  /** POSTs a body (JSON unless it is FormData, Blob or a stream). With a schema the response is validated; without one it is ignored. */
+  post<S extends z.ZodType>(
+    path: string,
+    body: unknown,
+    schema: S,
+    options?: RequestOptions,
+  ): Promise<z.infer<S>>;
+  post(path: string, body?: unknown, schema?: undefined, options?: RequestOptions): Promise<void>;
 }
+
+const isRawBody = (body: unknown): body is FormData | Blob | ReadableStream | ArrayBuffer =>
+  body instanceof FormData ||
+  body instanceof Blob ||
+  body instanceof ReadableStream ||
+  body instanceof ArrayBuffer;
 
 type Method = "GET" | "POST";
 
@@ -59,8 +78,14 @@ export function createApiClient({
       return await fetch(path, {
         method,
         credentials: "same-origin",
-        headers: body === undefined ? undefined : { "Content-Type": "application/json" },
-        body: body === undefined ? undefined : JSON.stringify(body),
+        headers:
+          body === undefined || isRawBody(body)
+            ? undefined
+            : { "Content-Type": "application/json" },
+        body:
+          body === undefined || isRawBody(body)
+            ? (body as BodyInit | undefined)
+            : JSON.stringify(body),
       });
     } catch {
       throw new ApiRequestError(0, "network", "Could not reach the server");
@@ -69,7 +94,9 @@ export function createApiClient({
 
   async function refreshOnce(startedAt: number): Promise<boolean> {
     // Another tab refreshed while this one waited for the lock: the cookies are already new.
-    if (refreshClock.get() >= startedAt) return true;
+    // A stored time in the future is garbage (clock change, tampering) and proves nothing.
+    const last = refreshClock.get();
+    if (last >= startedAt && last <= now()) return true;
     const res = await send("POST", REFRESH_PATH).catch(() => null);
     if (!res?.ok) return false;
     refreshClock.set(now());
@@ -79,7 +106,12 @@ export function createApiClient({
   /** One refresh at a time per tab (shared promise) and per browser (Web Lock). */
   function refresh(startedAt: number): Promise<boolean> {
     inflightRefresh ??= (
-      locks ? locks.request(REFRESH_LOCK, () => refreshOnce(startedAt)) : refreshOnce(startedAt)
+      locks
+        ? // The lock can be refused (SecurityError, detached document): refresh without it then.
+          locks
+            .request(REFRESH_LOCK, () => refreshOnce(startedAt))
+            .catch(() => refreshOnce(startedAt))
+        : refreshOnce(startedAt)
     ).finally(() => {
       inflightRefresh = null;
     });
@@ -97,12 +129,17 @@ export function createApiClient({
     );
   }
 
-  async function request(method: Method, path: string, body?: unknown): Promise<Response> {
+  async function request(
+    method: Method,
+    path: string,
+    body?: unknown,
+    { retry = !isRawBody(body) }: RequestOptions = {},
+  ): Promise<Response> {
     const startedAt = now();
     let res = await send(method, path, body);
     // A 401 may only mean the short-lived access cookie ran out. Refresh and retry exactly once;
     // the retry never refreshes again, so a session that is really gone cannot loop.
-    if (res.status === 401 && !NO_REFRESH_PATHS.has(path) && (await refresh(startedAt))) {
+    if (res.status === 401 && retry && !NO_REFRESH_PATHS.has(path) && (await refresh(startedAt))) {
       res = await send(method, path, body);
     }
     if (!res.ok) throw await toError(res);
@@ -110,11 +147,16 @@ export function createApiClient({
   }
 
   return {
-    async get(path, schema) {
-      return schema.parse(await (await request("GET", path)).json());
+    async get(path, schema, options) {
+      return schema.parse(await (await request("GET", path, undefined, options)).json());
     },
-    async post(path: string, body?: unknown, schema?: z.ZodType): Promise<never> {
-      const res = await request("POST", path, body);
+    async post(
+      path: string,
+      body?: unknown,
+      schema?: z.ZodType,
+      options?: RequestOptions,
+    ): Promise<never> {
+      const res = await request("POST", path, body, options);
       return (schema ? schema.parse(await res.json()) : undefined) as never;
     },
   };
@@ -154,16 +196,31 @@ function client(): ApiClient {
   return browserClient;
 }
 
-export function apiGet<S extends z.ZodType>(path: string, schema: S): Promise<z.infer<S>> {
-  return client().get(path, schema);
+export function apiGet<S extends z.ZodType>(
+  path: string,
+  schema: S,
+  options?: RequestOptions,
+): Promise<z.infer<S>> {
+  return client().get(path, schema, options);
 }
 
 export function apiPost<S extends z.ZodType>(
   path: string,
   body: unknown,
   schema: S,
+  options?: RequestOptions,
 ): Promise<z.infer<S>>;
-export function apiPost(path: string, body?: unknown): Promise<void>;
-export function apiPost(path: string, body?: unknown, schema?: z.ZodType): Promise<unknown> {
-  return schema ? client().post(path, body, schema) : client().post(path, body);
+export function apiPost(
+  path: string,
+  body?: unknown,
+  schema?: undefined,
+  options?: RequestOptions,
+): Promise<void>;
+export function apiPost(
+  path: string,
+  body?: unknown,
+  schema?: z.ZodType,
+  options?: RequestOptions,
+): Promise<unknown> {
+  return client().post(path, body, schema as z.ZodType, options);
 }

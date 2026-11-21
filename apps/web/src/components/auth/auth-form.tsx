@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/card.tsx";
 import { Input } from "@/components/ui/input.tsx";
 import { Label } from "@/components/ui/label.tsx";
-import { SESSION_KEY, useSession } from "@/hooks/use-session.ts";
+import { replaceSession, useSession } from "@/hooks/use-session.ts";
 import { apiPost } from "@/lib/api.ts";
 import { type AuthAction, authErrorMessage } from "@/lib/auth-errors.ts";
 import { safeReturnPath } from "@/lib/return-path.ts";
@@ -28,7 +28,7 @@ type FieldErrors = Partial<Record<Field, string>>;
 const COPY = {
   "sign-in": {
     title: "Sign in",
-    description: "Welcome back. Sign in to use the encoder, lab and gallery.",
+    description: "Sign in to your account.",
     submit: "Sign in",
     pending: "Signing in…",
     switchText: "No account yet?",
@@ -39,7 +39,7 @@ const COPY = {
   },
   "sign-up": {
     title: "Create an account",
-    description: "Your images and runs stay private to your account.",
+    description: "Create an account to get started.",
     submit: "Create account",
     pending: "Creating account…",
     switchText: "Already have an account?",
@@ -82,7 +82,7 @@ export function AuthForm({ action, next }: { action: AuthAction; next?: string }
       if (action === "sign-up") await apiPost("/api/v1/auth/register", credentials);
       return (await apiPost("/api/v1/auth/login", credentials, AuthResponse)).user;
     },
-    onSuccess: (user) => queryClient.setQueryData(SESSION_KEY, user),
+    onSuccess: (user) => replaceSession(queryClient, user),
   });
 
   const signedIn = Boolean(session.data);
@@ -137,7 +137,8 @@ export function AuthForm({ action, next }: { action: AuthAction; next?: string }
               autoCapitalize="none"
               spellCheck={false}
               required
-              disabled={busy}
+              readOnly={busy}
+              aria-disabled={busy}
               aria-invalid={Boolean(fieldErrors.email)}
               aria-describedby={fieldErrors.email ? "email-error" : undefined}
             />
@@ -157,7 +158,8 @@ export function AuthForm({ action, next }: { action: AuthAction; next?: string }
                 type={showPassword ? "text" : "password"}
                 autoComplete={copy.passwordAutocomplete}
                 required
-                disabled={busy}
+                readOnly={busy}
+                aria-disabled={busy}
                 className="pr-10"
                 aria-invalid={Boolean(fieldErrors.password)}
                 aria-describedby={
@@ -175,7 +177,6 @@ export function AuthForm({ action, next }: { action: AuthAction; next?: string }
                 size="icon-sm"
                 className="absolute top-1 right-1"
                 aria-label={showPassword ? "Hide password" : "Show password"}
-                aria-pressed={showPassword}
                 onClick={() => setShowPassword((shown) => !shown)}
               >
                 {showPassword ? <EyeOff /> : <Eye />}
@@ -193,7 +194,12 @@ export function AuthForm({ action, next }: { action: AuthAction; next?: string }
             )}
           </div>
 
-          <Button type="submit" size="lg" disabled={busy} className="w-full">
+          <Button
+            type="submit"
+            size="lg"
+            aria-disabled={busy}
+            className="w-full aria-disabled:opacity-50"
+          >
             {mutation.isPending && <Loader2 className="animate-spin" />}
             {mutation.isPending ? copy.pending : copy.submit}
           </Button>
