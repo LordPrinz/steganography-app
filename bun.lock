@@ -90,6 +90,9 @@
       "dependencies": {
         "@stego/native": "workspace:*",
       },
+      "devDependencies": {
+        "@stego/image-io": "workspace:*",
+      },
     },
     "packages/storage": {
       "name": "@stego/storage",

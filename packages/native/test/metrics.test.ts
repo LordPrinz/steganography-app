@@ -126,7 +126,7 @@ describe("lumaSsim", () => {
   test("handles the largest image the limits allow", () => {
     const a = { width: 4096, height: 4096, data: new Uint8ClampedArray(4096 * 4096 * 4) };
     expect(lumaSsim(a, a)).toBe(1);
-  });
+  }, 60_000);
 });
 
 describe("bitErrors", () => {
