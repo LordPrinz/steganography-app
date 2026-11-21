@@ -1,4 +1,8 @@
-import { createMemoryRefreshTokenRepository, createMemoryUserRepository } from "@stego/db/testing";
+import {
+  createMemoryImageRepository,
+  createMemoryRefreshTokenRepository,
+  createMemoryUserRepository,
+} from "@stego/db/testing";
 import { createMemoryStore } from "@stego/kv";
 import { createMemoryObjectStore } from "@stego/storage";
 import type { ServerDeps } from "../app.ts";
@@ -13,6 +17,7 @@ export function testServerDeps(overrides: Partial<ServerDeps> = {}): ServerDeps 
     kv: createMemoryStore(),
     storage: createMemoryObjectStore(),
     users: createMemoryUserRepository(),
+    images: createMemoryImageRepository(),
     refreshTokens: createMemoryRefreshTokenRepository(),
     jwtSecret: TEST_JWT_SECRET,
     appOrigin: TEST_ORIGIN,
