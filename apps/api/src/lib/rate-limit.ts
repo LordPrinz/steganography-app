@@ -1,4 +1,5 @@
 import { assertTtl, type KeyValueStore } from "@stego/kv";
+import { HttpError } from "./http.ts";
 
 export interface RateLimitOptions {
   /** Separates limiters, e.g. "login". Lowercase letters, digits and dashes. */
@@ -68,4 +69,22 @@ export function createRateLimiter(
       };
     },
   };
+}
+
+/** Throws a 429 with `Retry-After` when over the limit. While the store is down, requests pass. */
+export async function enforce(check: () => Promise<RateLimitResult>): Promise<void> {
+  let result: RateLimitResult;
+  try {
+    result = await check();
+  } catch (error) {
+    // ADR 0003: counters live in Redis. While it is down, requests pass rather than locking everyone out.
+    console.error("Rate limiter unavailable; letting the request through", error);
+    return;
+  }
+  if (!result.allowed) {
+    const retryAfter = Math.max(1, Math.ceil(result.retryAfterMs / 1000));
+    throw new HttpError(429, "rate_limited", "Too many requests", undefined, {
+      "Retry-After": String(retryAfter),
+    });
+  }
 }

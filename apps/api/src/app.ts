@@ -1,29 +1,37 @@
-import type { RefreshTokenRepository, UserRepository } from "@stego/db";
+import type { ImageRepository, RefreshTokenRepository, UserRepository } from "@stego/db";
 import type { KeyValueStore } from "@stego/kv";
 import type { ObjectStore } from "@stego/storage";
+import { type ConcurrencyLimit, createConcurrencyLimit } from "./lib/concurrency-limit.ts";
 import { requireOrigin } from "./lib/csrf.ts";
 import { API_PREFIX, errorResponse, HttpError, mount } from "./lib/http.ts";
-import { authRoutes } from "./modules/auth/routes.ts";
+import { authRoutes, createRequireUser } from "./modules/auth/routes.ts";
 import { createAuthService } from "./modules/auth/service.ts";
 import { createAccessTokens } from "./modules/auth/tokens.ts";
 import { healthRoutes } from "./modules/health/routes.ts";
+import { imageRoutes, MAX_REQUEST_BYTES } from "./modules/images/routes.ts";
+import { createImageService, type ImageLimits } from "./modules/images/service.ts";
 
 const ACCESS_TTL_SECONDS = 15 * 60;
 const REFRESH_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-// Every body is small JSON so far. Bun applies this server-wide, so image uploads must revisit it.
-const MAX_BODY_BYTES = 64 * 1024;
+const IMAGE_URL_TTL_SECONDS = 10 * 60;
+const DECODE_SLOTS = 2;
 
 export interface ServerDeps {
   port: number;
   kv: KeyValueStore;
-  storage: Pick<ObjectStore, "ping">;
+  storage: Pick<ObjectStore, "ping" | "put" | "delete" | "presignGet">;
   users: UserRepository;
+  images: ImageRepository;
   refreshTokens: RefreshTokenRepository;
   jwtSecret: string;
   /** The web app's origin: the only one allowed to make state-changing requests. */
   appOrigin: string;
   /** Peers allowed to set X-Client-IP (see lib/client-ip.ts). */
   trustedProxies: ReadonlySet<string>;
+  /** Concurrent image decodes allowed in this process (default 2). Uploads beyond it get a 503. */
+  decodeLimit?: ConcurrencyLimit;
+  /** Per-user image caps (default: the contract constants). */
+  imageLimits?: ImageLimits;
 }
 
 export function createServer({
@@ -31,10 +39,13 @@ export function createServer({
   kv,
   storage,
   users,
+  images,
   refreshTokens,
   jwtSecret,
   appOrigin,
   trustedProxies,
+  decodeLimit = createConcurrencyLimit(DECODE_SLOTS),
+  imageLimits,
 }: ServerDeps) {
   const auth = createAuthService({
     users,
@@ -44,9 +55,20 @@ export function createServer({
     refreshTtlMs: REFRESH_TTL_MS,
   });
 
+  const requireUser = createRequireUser(auth);
+  const imageService = createImageService({
+    images,
+    storage,
+    urlTtlSeconds: IMAGE_URL_TTL_SECONDS,
+    decodeLimit,
+    limits: imageLimits,
+  });
+
   return Bun.serve({
     port,
-    maxRequestBodySize: MAX_BODY_BYTES,
+    // Bun applies one body limit to the whole server, so it is sized for uploads. JSON bodies are held to
+    // 64 KiB by `parseBody`, uploads to MAX_UPLOAD_BYTES by the upload route.
+    maxRequestBodySize: MAX_REQUEST_BYTES,
     routes: requireOrigin(
       {
         ...mount(API_PREFIX, healthRoutes({ kv, storage })),
@@ -61,6 +83,7 @@ export function createServer({
             trustedProxies,
           }),
         ),
+        ...mount(API_PREFIX, imageRoutes({ images: imageService, kv, requireUser })),
       },
       appOrigin,
     ),

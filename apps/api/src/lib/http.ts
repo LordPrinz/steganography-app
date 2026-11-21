@@ -38,14 +38,45 @@ export function errorResponse(error: unknown): Response {
   return json(body, { status: 500 });
 }
 
+/** JSON bodies stay small. Bun's server-wide limit is raised for uploads, so this cap is enforced here. */
+export const MAX_JSON_BYTES = 64 * 1024;
+
+const payloadTooLarge = () => new HttpError(413, "payload_too_large", "Request body is too large");
+
+/**
+ * Reads the body, failing with a 413 as soon as it exceeds `maxBytes`. A declared Content-Length over
+ * the cap is refused before any byte is read; the running count covers chunked bodies and false lengths.
+ */
+export async function readBody(req: Request, maxBytes: number): Promise<Uint8Array> {
+  if (Number(req.headers.get("content-length")) > maxBytes) throw payloadTooLarge();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  if (req.body) {
+    const reader = req.body.getReader();
+    for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
+      size += chunk.value.byteLength;
+      if (size > maxBytes) {
+        await reader.cancel();
+        throw payloadTooLarge();
+      }
+      chunks.push(chunk.value);
+    }
+  }
+  return chunks.length === 1 ? (chunks[0] as Uint8Array) : Buffer.concat(chunks);
+}
+
 /** Parses a JSON body against a contract schema; any failure is a 400 that never echoes the input. */
 export async function parseBody<S extends z.ZodType>(
   req: Request,
   schema: S,
 ): Promise<z.output<S>> {
-  const body = await req.json().catch(() => {
+  const bytes = await readBody(req, MAX_JSON_BYTES);
+  let body: unknown;
+  try {
+    body = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
     throw new HttpError(400, "invalid_request", "Body must be JSON");
-  });
+  }
   const parsed = schema.safeParse(body);
   if (!parsed.success) {
     const details = parsed.error.issues.map(({ path, message }) => ({ path, message }));
