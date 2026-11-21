@@ -117,3 +117,32 @@ describe("LSB (ADR 5)", () => {
     expect(rows.filter((r) => r.attack === "jpeg90").every((r) => !r.success)).toBe(true);
   });
 });
+
+describe("layered embedding (ADR 9)", () => {
+  const dct = "kochZhao:ecc=hamming74";
+  const dwt = "dwtQim:level=2,step=64,ecc=hamming74";
+
+  test("all three layers reveal exactly without an attack", async () => {
+    const rows = await run(["--preset", "layered", "--scenario", "none"]);
+    expect(rows).toHaveLength(12);
+    expect(rows.every((r) => r.success && r.ber === 0)).toBe(true);
+  });
+
+  test("the DCT and DWT layers survive JPEG 75 and 50, the LSB layer does not", async () => {
+    const rows = await run(["--preset", "layered", "--scenario", "jpeg75", "--scenario", "jpeg50"]);
+    const ofLayer = (spec: string) => rows.filter((r) => r.spec === spec);
+    expect(ofLayer(dct).every((r) => r.success)).toBe(true);
+    expect(ofLayer(dwt).every((r) => r.success)).toBe(true);
+    expect(ofLayer("lsb").every((r) => !r.success)).toBe(true);
+    expect(meanBer(rows, "lsb", "jpeg75")).toBeGreaterThan(0.4);
+  });
+
+  test("a layered image keeps a PSNR above 33 dB on natural images", async () => {
+    const rows = await run(["--preset", "layered", "--scenario", "none"]);
+    expect(Math.min(...rows.map((r) => r.psnr))).toBeGreaterThan(33);
+  });
+
+  test("a payload without a frame cannot be layered", async () => {
+    await expect(run(["--preset", "layered", "--payload", "fill"])).rejects.toThrow(/layered/);
+  });
+});
