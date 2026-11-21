@@ -34,6 +34,8 @@ packages/
   db/             SQL migrations, migration runner, row types (Bun.SQL)
   storage/        ObjectStore port, S3 adapter (Bun.S3Client) and in-memory fake
 infra/            docker-compose for Postgres, Redis, RustFS (S3) and Caddy
+tools/
+  bench/          robustness bench CLI: method x attack x image matrix, CSV/JSON output
 scripts/          git hooks and GitHub automation (Bun scripts)
 docs/             design docs and ADRs
 ```
@@ -67,5 +69,6 @@ http://localhost:8080 instead (Caddy in front of Next sets the client IP; see `d
 | `bun run db:migrate`          | apply migrations                                                                            |
 | `bun run native:build`        | rebuild the C kernels (`packages/native/build/`)                                            |
 | `bun run native:sanitize`     | run the C kernels under ASan + UBSan                                                        |
+| `bun run bench <images…>`     | robustness matrix to a table, `--csv`/`--json` for rows; `--help`, `--preset koch-zhao`     |
 | `bun run native:bench`        | benchmark TS vs TinyCC vs `-O3` on a 12 MP image                                            |
 | `bun run native:format`       | format the C sources (clang-format 19.1.7 through `pipx`)                                   |

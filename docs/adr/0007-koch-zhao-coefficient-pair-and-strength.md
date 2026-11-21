@@ -34,11 +34,11 @@ the method on it.
 
 ## Experiment
 
-`bun run bench:koch-zhao` (`packages/stego-engine/bench/koch-zhao.ts`) embeds a fixed random payload
+`bun run bench --preset koch-zhao` (the bench CLI in `tools/bench`) embeds a fixed random payload
 at full capacity into four natural photographs and measures PSNR and the raw bit error rate after JPEG
 at quality 90, 75 and 50 (`Bun.Image`, through `applyAttack`). The images are Kodak Lossless True Color
 images 3, 8, 15 and 23, scaled to 384 × 256 (1536 bits each); source and licence are in
-`bench/images/README.md`. Values are means over the four images. Four coefficient pairs and six
+`tools/bench/images/README.md`. Values are means over the four images. Four coefficient pairs and six
 strengths were compared.
 
 | pair           |   P | PSNR (dB) | BER q90 | BER q75 | BER q50 |
@@ -101,7 +101,7 @@ What the numbers show:
 - `STEGO_E_EMBED` is a new status code (`embed-failed`). It should not occur in practice, since
   the margin can grow by a factor of 64, but it keeps the guarantee that `embed` either returns an
   image that reads back exactly or throws.
-- The bench needs `@stego/image-io`, so `stego-engine` has it as a dev dependency. The engine itself does
-  not import it.
+- The bench and the JPEG regression tests live in `tools/bench`, which depends on `@stego/image-io`.
+  `stego-engine` does not.
 - The numbers hold for these four photographs and for `Bun.Image`'s JPEG encoder. If lab results on a
   larger set disagree, the defaults are revisited here.

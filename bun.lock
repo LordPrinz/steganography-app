@@ -100,13 +100,21 @@
       "dependencies": {
         "@stego/native": "workspace:*",
       },
-      "devDependencies": {
-        "@stego/image-io": "workspace:*",
-      },
     },
     "packages/storage": {
       "name": "@stego/storage",
       "version": "0.0.0",
+    },
+    "tools/bench": {
+      "name": "@stego/bench",
+      "version": "0.0.0",
+      "dependencies": {
+        "@stego/contracts": "workspace:*",
+        "@stego/engine": "workspace:*",
+        "@stego/image-io": "workspace:*",
+        "@stego/native": "workspace:*",
+        "zod": "4.6.7",
+      },
     },
   },
   "packages": {
@@ -423,6 +431,8 @@
     "@sindresorhus/merge-streams": ["@sindresorhus/merge-streams@4.0.0", "", {}, "sha512-tlqY9xq5ukxTUZBmoOp+m61cqwQD5pHJtFY3Mn8CA8ps6yghLH/Hw8UPdqg4OLmFW3IFlcXnQNmo/dh8HzXYIQ=="],
 
     "@stego/api": ["@stego/api@workspace:apps/api"],
+
+    "@stego/bench": ["@stego/bench@workspace:tools/bench"],
 
     "@stego/contracts": ["@stego/contracts@workspace:packages/contracts"],
 
