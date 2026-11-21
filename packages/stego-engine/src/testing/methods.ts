@@ -1,6 +1,7 @@
 import { withErrorCorrection } from "../ecc/code.ts";
 import { hamming74 } from "../ecc/hamming74.ts";
 import { repetition } from "../ecc/repetition.ts";
+import { dwtQim } from "../methods/dwt-qim.ts";
 import { lsb } from "../methods/lsb.ts";
 import type { MethodCase } from "./method-contract.ts";
 
@@ -17,5 +18,13 @@ export const methodCases: readonly MethodCase[] = [
   {
     name: "lsb 2 bits per channel, Hamming(7,4)",
     method: withErrorCorrection(lsb({ bitsPerChannel: 2 }), hamming74()),
+  },
+  ...(["LL", "HL", "LH"] as const).map((band) => ({
+    name: `dwt-qim ${band} level 1, step 24`,
+    method: dwtQim({ band, level: 1, step: 24 }),
+  })),
+  {
+    name: "dwt-qim LL level 1, step 24, Hamming(7,4)",
+    method: withErrorCorrection(dwtQim({ band: "LL", level: 1, step: 24 }), hamming74()),
   },
 ];

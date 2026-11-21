@@ -182,7 +182,9 @@ describe.each(methodCases)("stego codec: $name", ({ method }) => {
   });
 
   describe("message length limit", () => {
-    const large = noiseImage(512, 512);
+    // Methods with one bit per several pixels (DWT + QIM) need a larger image to hold the limit.
+    const side = capacity(512, 512, method) > MAX_MESSAGE_BYTES ? 512 : 2048;
+    const large = noiseImage(side, side);
 
     test("the image holds more than the limit", () => {
       expect(capacity(large.width, large.height, method)).toBeGreaterThan(MAX_MESSAGE_BYTES);

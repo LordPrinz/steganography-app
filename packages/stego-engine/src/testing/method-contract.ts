@@ -33,7 +33,7 @@ export function describeMethodContract(cases: readonly MethodCase[]): void {
     test("extract(n) is a prefix of extract(m)", () => {
       const stego = method.embed(cover, randomBits(capacity));
       const all = method.extract(stego, capacity);
-      for (const n of [0, 1, 64, Math.floor(capacity / 2)]) {
+      for (const n of [0, 1, 64, Math.floor(capacity / 2)].filter((n) => n <= capacity)) {
         expect(method.extract(stego, n)).toEqual(all.subarray(0, n));
       }
     });

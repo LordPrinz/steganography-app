@@ -59,6 +59,10 @@ DCT and DWT embed in luminance (Y of YCbCr): JPEG keeps luma at full resolution 
 Rounding / clipping to 0–255 after the inverse transform can flip bits even without an attack, so every
 method's round-trip test without attacks must recover the payload exactly.
 
+Haar DWT + QIM (`dwtQim({ band, level, step })`) hides one bit per coefficient of one band at one level.
+It reads the image back during embedding and moves again any bit that rounding or clamping would flip,
+so the round trip is exact. Recommended: LL, level 2, step 32. See ADR 8.
+
 ### Decoding after resizing
 
 Resizing breaks the 8×8 / wavelet grid. The lab uses **non-blind** decoding for resize scenarios: the

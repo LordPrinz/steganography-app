@@ -1,5 +1,6 @@
 export * from "./blur.ts";
 export * from "./color.ts";
+export * from "./dwt.ts";
 export { assertDimensions, type RgbaPixels } from "./image.ts";
 export { NativeLibraryError } from "./library.ts";
 export * from "./lsb.ts";

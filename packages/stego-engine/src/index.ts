@@ -12,6 +12,7 @@ export {
 export { type ErrorCorrectingCode, withErrorCorrection } from "./ecc/code.ts";
 export { hamming74 } from "./ecc/hamming74.ts";
 export { type RepetitionParams, repetition } from "./ecc/repetition.ts";
+export { type DwtQimParams, dwtQim } from "./methods/dwt-qim.ts";
 export { type LsbParams, lsb } from "./methods/lsb.ts";
 export { ber, psnr, ssim } from "./metrics.ts";
 export { type ConfiguredMethod, MethodId, type RgbaImage } from "./types.ts";
