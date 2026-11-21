@@ -1,18 +1,22 @@
 import {
   DecodeRequest,
   EncodeRequest,
+  ListOperationsQuery,
   type Operation,
   type OperationAccepted,
+  type OperationPage,
 } from "@stego/contracts";
 import type { KeyValueStore } from "@stego/kv";
 import type { BunRequest } from "bun";
 import { z } from "zod";
+import { decodeCursor } from "../../lib/cursor.ts";
 import { API_PREFIX, HttpError, json, parseBody } from "../../lib/http.ts";
 import { createRateLimiter, enforce, type RateLimitOptions } from "../../lib/rate-limit.ts";
 import type { RequireUser } from "../auth/routes.ts";
 import {
   InvalidMethodError,
   MessageTooLargeError,
+  OperationActiveError,
   type OperationService,
   SourceNotFoundError,
   TooManyActiveOperationsError,
@@ -59,6 +63,9 @@ function refusal(error: unknown): unknown {
       available: error.available,
     });
   }
+  if (error instanceof OperationActiveError) {
+    return new HttpError(409, "operation_active", "Wait for the operation to finish first");
+  }
   if (error instanceof TooManyActiveOperationsError) {
     return new HttpError(
       429,
@@ -82,6 +89,23 @@ export function operationRoutes({ operations, kv, requireUser }: OperationRoutes
   }
 
   return {
+    "/operations": {
+      GET: async (req: BunRequest) => {
+        const user = await requireUser(req);
+        const query = ListOperationsQuery.safeParse(
+          Object.fromEntries(new URL(req.url).searchParams),
+        );
+        if (!query.success) throw new HttpError(400, "invalid_request", "Invalid query");
+        const { cursor, ...options } = query.data;
+        const after = cursor === undefined ? undefined : decodeCursor(cursor);
+        if (after === null) throw new HttpError(400, "invalid_cursor", "Invalid cursor");
+        // Parameters and results of the user's own operations: never cached.
+        return json<OperationPage>(await operations.list(user.id, { ...options, after }), {
+          headers: { "Cache-Control": "no-store" },
+        });
+      },
+    },
+
     "/operations/encode": {
       POST: async (req: BunRequest) => {
         const user = await requireUser(req);
@@ -111,6 +135,14 @@ export function operationRoutes({ operations, kv, requireUser }: OperationRoutes
         if (!operation) throw operationNotFound();
         // The body can hold a decoded message.
         return json<Operation>(operation, { headers: { "Cache-Control": "no-store" } });
+      },
+
+      DELETE: async (req: BunRequest<"/operations/:id">) => {
+        const user = await requireUser(req);
+        const id = z.uuid().safeParse(req.params.id);
+        if (!id.success) throw operationNotFound();
+        if (!(await refuse(operations.remove(user.id, id.data)))) throw operationNotFound();
+        return new Response(null, { status: 204 });
       },
     },
   };

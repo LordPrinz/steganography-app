@@ -1,4 +1,5 @@
 import type { SQL } from "bun";
+import type { KeysetCursor } from "./keyset.ts";
 import type { ImageKind, ImageRow } from "./types.ts";
 
 export interface NewImage {
@@ -12,14 +13,8 @@ export interface NewImage {
   sha256: string;
 }
 
-/**
- * Position in a user's gallery. `createdAt` is a full-precision ISO timestamp: Postgres keeps
- * microseconds, a JS Date only milliseconds, and a rounded cursor would skip or repeat rows.
- */
-export interface ImageCursor {
-  createdAt: string;
-  id: string;
-}
+/** Position in a user's gallery. */
+export type ImageCursor = KeysetCursor;
 
 export interface ImagePage {
   images: ImageRow[];
