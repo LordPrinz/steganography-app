@@ -33,7 +33,7 @@ packages/
   contracts/      Zod schemas shared by api and web
   db/             SQL migrations, migration runner, row types (Bun.SQL)
   storage/        ObjectStore port, S3 adapter (Bun.S3Client) and in-memory fake
-infra/            docker-compose for Postgres, Redis and RustFS (S3)
+infra/            docker-compose for Postgres, Redis, RustFS (S3) and Caddy
 scripts/          git hooks and GitHub automation (Bun scripts)
 docs/             design docs and ADRs
 ```
@@ -44,11 +44,15 @@ Requirements: Bun ≥ 1.4.4, Docker, a C compiler (Xcode command line tools, gcc
 
 ```bash
 bun install            # also installs the git hooks and builds the C kernels
-cp .env.example .env
-bun run infra:up       # Postgres :5432, Redis :6379, RustFS S3 :9000 (console :9001/rustfs/console/)
+cp .env.example .env   # then set JWT_SECRET: openssl rand -base64 48
+bun run infra:up       # Postgres :5432, Redis :6379, RustFS S3 :9000 (console :9001/rustfs/console/), Caddy :8080
 bun run db:migrate
 bun run dev            # api :4000, worker, web :3000
 ```
+
+http://localhost:3000 is enough for everyday work. To test per-IP rate limits, browse
+http://localhost:8080 instead (Caddy in front of Next sets the client IP; see `docs/DESIGN.md`) and set
+`APP_ORIGIN=http://localhost:8080` in `.env`.
 
 ## Scripts
 

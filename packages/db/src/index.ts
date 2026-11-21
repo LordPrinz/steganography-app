@@ -5,5 +5,6 @@ export function createDb(url: string): SQL {
 }
 
 export type Db = SQL;
+export * from "./auth.ts";
 export * from "./jobs.ts";
 export * from "./types.ts";

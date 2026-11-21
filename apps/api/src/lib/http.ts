@@ -1,4 +1,5 @@
 import type { ApiError } from "@stego/contracts";
+import type { z } from "zod";
 
 export function json<T>(body: T, init?: ResponseInit): Response {
   return Response.json(body, init);
@@ -19,6 +20,7 @@ export class HttpError extends Error {
     readonly code: string,
     message: string,
     readonly details?: unknown,
+    readonly headers?: Record<string, string>,
   ) {
     super(message);
   }
@@ -29,9 +31,25 @@ export function errorResponse(error: unknown): Response {
     const body: ApiError = {
       error: { code: error.code, message: error.message, details: error.details },
     };
-    return json(body, { status: error.status });
+    return json(body, { status: error.status, headers: error.headers });
   }
   console.error(error);
   const body: ApiError = { error: { code: "internal", message: "Internal server error" } };
   return json(body, { status: 500 });
+}
+
+/** Parses a JSON body against a contract schema; any failure is a 400 that never echoes the input. */
+export async function parseBody<S extends z.ZodType>(
+  req: Request,
+  schema: S,
+): Promise<z.output<S>> {
+  const body = await req.json().catch(() => {
+    throw new HttpError(400, "invalid_request", "Body must be JSON");
+  });
+  const parsed = schema.safeParse(body);
+  if (!parsed.success) {
+    const details = parsed.error.issues.map(({ path, message }) => ({ path, message }));
+    throw new HttpError(400, "invalid_request", "Invalid request body", details);
+  }
+  return parsed.data;
 }

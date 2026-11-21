@@ -6,7 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./migrator": "./src/migrator.ts",
-    "./testing": "./src/testing.ts"
+    "./testing": "./src/testing/index.ts"
   },
   "scripts": {
     "typecheck": "tsc -p .",

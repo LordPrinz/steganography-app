@@ -19,6 +19,7 @@ export interface RefreshTokenRow {
   token_hash: string;
   expires_at: Date;
   revoked_at: Date | null;
+  replaced_by: string | null;
   created_at: Date;
 }
 
