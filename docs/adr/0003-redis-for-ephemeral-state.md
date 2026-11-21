@@ -54,3 +54,15 @@ reach Postgres or the logs.
 - With the AOF enabled, a deleted or expired message can stay in the append-only file until the next
   rewrite. Redis still holds no message for longer than its TTL, but the file is disk, so it must be
   protected like the database.
+
+## Update: waking the worker (#52)
+
+Redis pub/sub also tells the worker that a job was enqueued. It is a hint, not a queue.
+
+- After the enqueue transaction commits, the API publishes an empty message on `jobs:enqueued`. A failed
+  publish is logged and never reaches the client.
+- The worker subscribes on a dedicated client (a subscribed connection can run almost no other command),
+  renews the subscription after every reconnect, and claims at once on a message. Several messages in a row
+  count as one.
+- The poll loop is unchanged. A lost message, a Redis outage or a reconnect gap only delays a job until the
+  next poll.

@@ -20,6 +20,8 @@ export interface WorkerOptions {
 export interface Worker {
   /** Resolves once stop() was called and the job in progress has finished. */
   run(): Promise<void>;
+  /** Hint that a job may be waiting: cuts the current pause short. Repeated calls coalesce into one claim. */
+  wake(): void;
   /** Stops picking new jobs; the current one runs to completion. */
   stop(): void;
 }
@@ -49,12 +51,15 @@ export function createWorker({
 
   let running = false;
   let loop: Promise<void> | undefined;
-  let wake: (() => void) | undefined;
+  let interrupt: (() => void) | undefined;
+  // Set by wake(), cleared before each claim: a hint that arrives mid-claim skips the next pause.
+  let woken = false;
 
   function idle(ms: number): Promise<void> {
+    if (woken) return Promise.resolve();
     return new Promise((resolve) => {
       const timer = setTimeout(resolve, ms);
-      wake = () => {
+      interrupt = () => {
         clearTimeout(timer);
         resolve();
       };
@@ -151,6 +156,7 @@ export function createWorker({
 
   async function poll(): Promise<void> {
     while (running) {
+      woken = false;
       try {
         const job = (await ready?.()) === false ? null : await queue.claim();
         if (job) {
@@ -177,9 +183,13 @@ export function createWorker({
         loop = undefined;
       }
     },
+    wake() {
+      woken = true;
+      interrupt?.();
+    },
     stop() {
       running = false;
-      wake?.();
+      interrupt?.();
     },
   };
 }
