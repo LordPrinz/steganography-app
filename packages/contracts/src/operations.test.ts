@@ -1,12 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { StegoMethod } from "./methods.ts";
-import {
-  AUTO_SELECTIONS,
-  DecodeRequest,
-  EncodeRequest,
-  EncodeResult,
-  MethodSelection,
-} from "./operations.ts";
+import { DecodeRequest, EncodeRequest, EncodeResult } from "./operations.ts";
+import { AUTO_SELECTIONS, MethodSelection } from "./selections.ts";
 
 const imageId = crypto.randomUUID();
 

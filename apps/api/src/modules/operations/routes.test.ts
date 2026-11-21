@@ -14,7 +14,8 @@ import { createServer, type ServerDeps } from "../../app.ts";
 import { createRateLimiter } from "../../lib/rate-limit.ts";
 import { Client } from "../../testing/client.ts";
 import { testServerDeps } from "../../testing/server-deps.ts";
-import { MAX_ENCODE_BODY_BYTES, OPERATION_RATE_LIMITS } from "./routes.ts";
+import { MAX_ENCODE_BODY_BYTES } from "./refusal.ts";
+import { OPERATION_RATE_LIMITS } from "./routes.ts";
 
 // Runs against the in-memory repositories, and again against Postgres when TEST_DATABASE_URL is set.
 const testDb = createTestDatabase();

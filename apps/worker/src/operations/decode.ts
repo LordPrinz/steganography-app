@@ -27,7 +27,7 @@ export function createDecodeHandler(deps: DecodeDeps): JobHandler {
     const selections: readonly MethodSelection[] =
       params.data.method === "auto" ? AUTO_SELECTIONS : [params.data.method];
 
-    const source = await loadSource(deps, operation);
+    const source = await loadSource({ ...deps, allowVariant: true }, operation);
     const attempts: DecodeAttempt[] = [];
     let found: string | null = null;
     for (const selection of selections) {

@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { Operation, OperationAccepted } from "@stego/contracts";
+import { Experiment, ImagePage, Operation, OperationAccepted } from "@stego/contracts";
 import {
   createImageRepository,
   createJobQueue,
@@ -13,6 +13,7 @@ import {
   createMemoryStore,
   createMemoryWake,
   createMessageHandoff,
+  createProgressStore,
   createRedisStore,
   type KeyValueStore,
 } from "@stego/kv";
@@ -24,6 +25,7 @@ import { testServerDeps } from "../../../api/src/testing/server-deps.ts";
 import { createWorker } from "../worker.ts";
 import { createDecodeHandler } from "./decode.ts";
 import { createEncodeHandler } from "./encode.ts";
+import { createExperimentHandler } from "./experiment.ts";
 
 // The whole path: API request, Postgres job, worker handler, stego image in storage, and back through a
 // second request. Needs TEST_DATABASE_URL; the Redis variant also needs TEST_REDIS_URL.
@@ -142,6 +144,11 @@ describe.skipIf(!sql).each(kvBackends)(
         handlers: {
           encode: createEncodeHandler({ images, operations, storage }),
           decode: createDecodeHandler({ images, storage }),
+          experiment: createExperimentHandler({
+            images,
+            storage,
+            progress: createProgressStore(kv),
+          }),
         },
         handoff: createMessageHandoff(kv),
         // The wake-up is what starts jobs here, not the poll.
@@ -288,6 +295,60 @@ describe.skipIf(!sql).each(kvBackends)(
           resultImage: null,
           result: { kind: "encode" },
         });
+      },
+    );
+
+    test.skipIf(!enabled)(
+      "an experiment runs the whole matrix and keeps its variants out of the gallery",
+      async () => {
+        const { db, server, ann, upload } = await start();
+        const res = await ann.postJson("/experiments", {
+          mode: "A",
+          imageId: upload.id,
+          message: SECRET,
+        });
+        expect(res.status).toBe(202);
+        const { id } = OperationAccepted.parse(await res.json());
+        expect(res.headers.get("location")).toBe(`/api/v1/experiments/${id}`);
+
+        let experiment: Experiment | undefined;
+        for (let i = 0; i < 1200; i++) {
+          const got = await ann.request("GET", `/experiments/${id}`);
+          experiment = Experiment.parse(await got.json());
+          if (experiment.status === "succeeded" || experiment.status === "failed") break;
+          await Bun.sleep(25);
+        }
+        expect(experiment).toMatchObject({ type: "experiment", status: "succeeded", error: null });
+        const result = experiment?.result;
+        if (result?.kind !== "experiment") throw new Error("not an experiment result");
+        expect(result.variants).toHaveLength(33);
+        expect(result.aggregates).toHaveLength(33);
+        expect(
+          result.variants.find((v) => v.method === "lsb" && v.label === "jpeg50"),
+        ).toMatchObject({ success: false });
+        expect(Object.keys(experiment?.variantImages ?? {})).toHaveLength(33);
+        expect(experiment?.progress).toBeNull();
+
+        // The stored attacked images are not in the gallery and not in the quota.
+        const gallery = ImagePage.parse(await (await ann.request("GET", "/images")).json());
+        expect(gallery.images.map((image) => image.id)).toEqual([upload.id]);
+        const [counted] = await db<{ n: number }[]>`
+          SELECT count(*)::int AS n FROM images WHERE kind = 'variant' AND expires_at > now()
+        `;
+        expect(counted?.n).toBe(33);
+
+        // Only its owner reads it, and it is not served as another kind of operation.
+        const bob = new Client(server.url, "bob@example.com");
+        await bob.signIn();
+        expect((await bob.request("GET", `/experiments/${id}`)).status).toBe(404);
+
+        const rows = await db<{ row: string }[]>`
+          SELECT to_jsonb(o)::text AS row FROM operations o
+          UNION ALL SELECT to_jsonb(j)::text FROM jobs j
+          UNION ALL SELECT to_jsonb(i)::text FROM images i
+        `;
+        for (const { row } of rows) expect(row).not.toContain(SECRET);
+        expectNoSecretLogged();
       },
     );
 

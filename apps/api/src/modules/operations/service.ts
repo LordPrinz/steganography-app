@@ -1,13 +1,24 @@
 import {
+  AUTO_SELECTIONS,
+  DEFAULT_SCENARIOS,
   type DecodeRequest,
   type EncodeRequest,
+  EXPERIMENT_MAX_PIXELS,
+  EXPERIMENT_MIN_SIDE,
+  type Experiment,
+  type ExperimentParams,
+  type ExperimentRequest,
+  type ImageDetail,
   type ListOperationsQuery,
   MAX_ACTIVE_OPERATIONS_PER_USER,
+  MAX_EXPERIMENT_VARIANTS,
   type MethodSelection,
   type Operation,
   type OperationAccepted,
+  type OperationListItem,
   type OperationPage,
   OperationResult,
+  OperationResultSummary,
   OperationSummary,
   OperationType,
 } from "@stego/contracts";
@@ -19,7 +30,7 @@ import type {
   OperationView,
 } from "@stego/db";
 import { capacity, createMethod, MAX_MESSAGE_BYTES } from "@stego/engine";
-import type { KeyValueStore, MessageHandoff, WakePublisher } from "@stego/kv";
+import type { KeyValueStore, MessageHandoff, ProgressStore, WakePublisher } from "@stego/kv";
 import { z } from "zod";
 import { encodeCursor } from "../../lib/cursor.ts";
 import type { ImageService } from "../images/service.ts";
@@ -41,8 +52,43 @@ export class MessageTooLargeError extends Error {
   constructor(
     readonly needed: number,
     readonly available: number,
+    /** The method that does not hold it, when a request involves several (an experiment). */
+    readonly method?: MethodSelection["id"],
   ) {
     super("Message does not fit in the image");
+  }
+}
+
+/** The image is larger than an experiment accepts. */
+export class ExperimentImageTooLargeError extends Error {
+  override readonly name = "ExperimentImageTooLargeError";
+
+  constructor(
+    readonly pixels: number,
+    readonly maxPixels: number,
+  ) {
+    super("Image is too large for an experiment");
+  }
+}
+
+/** The request would run more method and scenario combinations than an experiment may. */
+export class TooManyVariantsError extends Error {
+  override readonly name = "TooManyVariantsError";
+
+  constructor(
+    readonly variants: number,
+    readonly maxVariants: number,
+  ) {
+    super("Experiment has too many variants");
+  }
+}
+
+/** The image has a side shorter than an experiment's measures can handle. */
+export class ExperimentImageTooSmallError extends Error {
+  override readonly name = "ExperimentImageTooSmallError";
+
+  constructor(readonly minSide: number) {
+    super("Image is too small for an experiment");
   }
 }
 
@@ -61,6 +107,14 @@ export interface OperationService {
   encode(userId: string, request: EncodeRequest): Promise<OperationAccepted>;
   /** Throws `SourceNotFoundError`, `InvalidMethodError` or `TooManyActiveOperationsError`. */
   decode(userId: string, request: DecodeRequest): Promise<OperationAccepted>;
+  /**
+   * Queues a robustness experiment. Throws `SourceNotFoundError`, `ExperimentImageTooLargeError`,
+   * `TooManyVariantsError`, `InvalidMethodError`, `MessageTooLargeError` (the message must fit every
+   * method it runs) or `TooManyActiveOperationsError`.
+   */
+  experiment(userId: string, request: ExperimentRequest): Promise<OperationAccepted>;
+  /** Null when the operation does not exist, is not an experiment or belongs to someone else. */
+  getExperiment(userId: string, id: string): Promise<Experiment | null>;
   /** Null when the operation does not exist or belongs to someone else. */
   get(userId: string, id: string): Promise<Operation | null>;
   /** Newest first, with no URLs and no revealed message. */
@@ -84,8 +138,13 @@ export interface OperationServiceDeps {
   wake: WakePublisher;
   /** Caches finished operations for polling. */
   kv: Pick<KeyValueStore, "get" | "set" | "del">;
+  /** Live progress of running experiments. */
+  progress: Pick<ProgressStore, "get">;
   maxActive?: number;
+  maxVariants?: number;
   cacheTtlMs?: number;
+  /** Milliseconds since the epoch; tests set it. */
+  now?: () => number;
   log?: Pick<Console, "error">;
 }
 
@@ -98,6 +157,15 @@ type CachedOperation = z.infer<typeof CachedOperation>;
 const cacheKey = (id: string) => `op:${id}:view`;
 
 function toSummary(row: OperationView): OperationSummary {
+  return { ...baseSummary(row), result: OperationResult.safeParse(row.result).data ?? null };
+}
+
+/** The history list's row: an experiment's variants and aggregates stay on its own endpoint. */
+function toListItem(row: OperationView): OperationListItem {
+  return { ...baseSummary(row), result: OperationResultSummary.safeParse(row.result).data ?? null };
+}
+
+function baseSummary(row: OperationView): Omit<OperationSummary, "result"> {
   return {
     id: row.id,
     type: OperationType.parse(row.type),
@@ -106,7 +174,6 @@ function toSummary(row: OperationView): OperationSummary {
     sourceImageId: row.source_image_id,
     resultImageId: row.result_image_id,
     params: row.params,
-    result: OperationResult.safeParse(row.result).data ?? null,
     // Only a failed job's code is a result; a retrying job still carries its last attempt's code.
     error: row.status === "failed" ? row.error : null,
     createdAt: row.created_at.toISOString(),
@@ -133,13 +200,21 @@ export function createOperationService({
   handoff,
   wake,
   kv,
+  progress,
   maxActive = MAX_ACTIVE_OPERATIONS_PER_USER,
+  maxVariants = MAX_EXPERIMENT_VARIANTS,
   cacheTtlMs = DEFAULT_CACHE_TTL_MS,
+  now = Date.now,
   log = console,
 }: OperationServiceDeps): OperationService {
-  async function ownedImage(userId: string, id: string) {
+  /**
+   * A variant (an attacked image of the lab) can be decoded, but not encoded into or attacked again,
+   * and none can be used once it expired.
+   */
+  async function ownedImage(userId: string, id: string, { allowVariant = false } = {}) {
     const image = await images.findOwned(userId, id);
-    if (!image) throw new SourceNotFoundError();
+    if (!image || (image.kind === "variant" && !allowVariant)) throw new SourceNotFoundError();
+    if (image.expires_at && image.expires_at.getTime() <= now()) throw new SourceNotFoundError();
     return image;
   }
 
@@ -192,6 +267,27 @@ export function createOperationService({
     }
   }
 
+  /** The operation's stored view, from the cache or the database; null unless it is the user's. */
+  async function findSummary(userId: string, id: string): Promise<CachedOperation | null> {
+    const cached = await readCache(id);
+    // A cached entry of someone else's operation is as good as a miss: no second lookup.
+    if (cached) return cached.userId === userId ? cached : null;
+    const row = await operations.findOwned(userId, id);
+    if (!row) return null;
+    const summary = { ...toSummary(row), userId: row.user_id };
+    if (isFinished(summary)) await writeCache(summary);
+    return summary;
+  }
+
+  async function readProgress(id: string) {
+    try {
+      return await progress.get(id);
+    } catch (error) {
+      log.error("Could not read the progress of an experiment", error);
+      return null;
+    }
+  }
+
   async function readRevealed(id: string): Promise<string | null> {
     try {
       return await handoff.getRevealed(id);
@@ -221,7 +317,7 @@ export function createOperationService({
     },
 
     async decode(userId, { imageId, method }) {
-      const image = await ownedImage(userId, imageId);
+      const image = await ownedImage(userId, imageId, { allowVariant: true });
       if (method !== "auto") buildMethod(method);
       return enqueue({
         userId,
@@ -232,16 +328,65 @@ export function createOperationService({
       });
     },
 
-    async get(userId, id) {
-      let cached = await readCache(id);
-      // A cached entry of someone else's operation is as good as a miss: no second lookup.
-      if (cached && cached.userId !== userId) return null;
-      if (!cached) {
-        const row = await operations.findOwned(userId, id);
-        if (!row) return null;
-        cached = { ...toSummary(row), userId: row.user_id };
-        if (isFinished(cached)) await writeCache(cached);
+    async experiment(userId, request) {
+      const image = await ownedImage(userId, request.imageId);
+      if (Math.min(image.width, image.height) < EXPERIMENT_MIN_SIDE) {
+        throw new ExperimentImageTooSmallError(EXPERIMENT_MIN_SIDE);
       }
+      const pixels = image.width * image.height;
+      if (pixels > EXPERIMENT_MAX_PIXELS) {
+        throw new ExperimentImageTooLargeError(pixels, EXPERIMENT_MAX_PIXELS);
+      }
+      const methods = request.mode === "A" ? AUTO_SELECTIONS : [request.method];
+      const scenarios = request.mode === "A" ? DEFAULT_SCENARIOS : request.scenarios;
+      const variants = methods.length * scenarios.length;
+      if (variants > maxVariants) throw new TooManyVariantsError(variants, maxVariants);
+      const needed = new TextEncoder().encode(request.message).byteLength;
+      for (const selection of methods) {
+        const method = buildMethod(selection);
+        const available = Math.min(capacity(image.width, image.height, method), MAX_MESSAGE_BYTES);
+        if (needed > available) throw new MessageTooLargeError(needed, available, selection.id);
+      }
+      // Expanded here, so the queued job does not change when the defaults do.
+      const params: ExperimentParams = {
+        mode: request.mode,
+        methods: [...methods],
+        scenarios: [...scenarios],
+      };
+      return enqueue(
+        {
+          userId,
+          type: "experiment",
+          method: request.mode === "B" ? request.method.id : null,
+          sourceImageId: image.id,
+          params,
+        },
+        request.message,
+      );
+    },
+
+    async getExperiment(userId, id) {
+      const cached = await findSummary(userId, id);
+      if (cached?.type !== "experiment") return null;
+      const running = cached.status === "queued" || cached.status === "running";
+      const imageIds = new Set(
+        cached.result?.kind === "experiment"
+          ? cached.result.variants.flatMap(({ imageId }) => (imageId ? [imageId] : []))
+          : [],
+      );
+      // Presigned per request, never cached; an image that expired meanwhile is left out.
+      const details = await Promise.all(
+        [...imageIds].map((imageId) => imageUrls.get(userId, imageId)),
+      );
+      const variantImages: Record<string, ImageDetail> = {};
+      for (const detail of details) if (detail) variantImages[detail.id] = detail;
+      const { userId: _, resultImageId: __, ...summary } = cached;
+      return { ...summary, progress: running ? await readProgress(id) : null, variantImages };
+    },
+
+    async get(userId, id) {
+      const cached = await findSummary(userId, id);
+      if (!cached) return null;
       const resultImage = cached.resultImageId
         ? await imageUrls.get(userId, cached.resultImageId)
         : null;
@@ -258,7 +403,7 @@ export function createOperationService({
         filter: { type, status, method: method === "auto" ? null : method },
       });
       return {
-        operations: page.operations.map(toSummary),
+        operations: page.operations.map(toListItem),
         nextCursor: page.next && encodeCursor(page.next),
       };
     },

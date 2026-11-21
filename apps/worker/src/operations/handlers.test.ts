@@ -362,3 +362,48 @@ describe("decode handler", () => {
     );
   });
 });
+
+describe("variant sources", () => {
+  async function addVariant(f: ReturnType<typeof fixture>, ttlMs: number) {
+    const key = newImageKey(USER);
+    await f.storage.put(key, await encodePng(noise(128, 128)));
+    const row = await f.images.createVariant(
+      {
+        userId: USER,
+        storageKey: key,
+        format: "png",
+        width: 128,
+        height: 128,
+        sizeBytes: 100,
+        sha256: "0".repeat(64),
+      },
+      { ttlMs, maxBytes: 1e9 },
+    );
+    return row as NonNullable<typeof row>;
+  }
+
+  test("an encode does not read a variant", async () => {
+    const f = fixture();
+    const variant = await addVariant(f, 60_000);
+    const handler = createEncodeHandler(f);
+    expect(await code(handler(f.job("encode", variant.id, { layers: [lsb] }), f.context()))).toBe(
+      "source_missing",
+    );
+  });
+
+  test("a decode reads a live variant but not an expired one", async () => {
+    const f = fixture();
+    const live = await addVariant(f, 60_000);
+    const expired = await addVariant(f, 1);
+    await Bun.sleep(10);
+    const handler = createDecodeHandler(f);
+    const result = (await handler(
+      f.job("decode", live.id, { method: "auto" }),
+      f.context(),
+    )) as DecodeResult;
+    expect(result.kind).toBe("decode");
+    expect(await code(handler(f.job("decode", expired.id, { method: "auto" }), f.context()))).toBe(
+      "source_missing",
+    );
+  });
+});

@@ -1,4 +1,5 @@
 import { fromBits, toBits } from "./bits.ts";
+import { errorCorrectionOf } from "./ecc/code.ts";
 import { ber as bitErrorRate } from "./metrics.ts";
 import {
   decodeFrameHeader,
@@ -18,10 +19,19 @@ export type RevealResult =
 /**
  * Reveal outcome plus the bit error rate over the payload bits of the expected message. It never
  * carries the revealed message, so a lab result can be stored as is.
+ *
+ * `channelBer` is set only for a method with error correction: the error rate of the raw bits the
+ * inner method read, over every coded bit of the expected frame (header, payload and CRC), before
+ * the code corrected anything. `ber` is the rate after correction.
  */
 export type MeasureResult =
-  | { readonly ok: true; readonly ber: number }
-  | { readonly ok: false; readonly error: RevealError; readonly ber: number };
+  | { readonly ok: true; readonly ber: number; readonly channelBer?: number }
+  | {
+      readonly ok: false;
+      readonly error: RevealError;
+      readonly ber: number;
+      readonly channelBer?: number;
+    };
 
 /**
  * The message does not fit; sizes are UTF-8 message bytes, as returned by `capacity`. `needed` is
@@ -129,6 +139,21 @@ export function measure(
     expected.subarray(HEADER_BITS, payloadEnd),
     actual.subarray(HEADER_BITS, payloadEnd),
   );
+  const channelBer = measureChannel(attacked, expected, method);
   const revealed = reveal(attacked, method);
-  return revealed.ok ? { ok: true, ber } : { ok: false, error: revealed.error, ber };
+  return revealed.ok
+    ? { ok: true, ber, ...channelBer }
+    : { ok: false, error: revealed.error, ber, ...channelBer };
+}
+
+/** Error rate of the coded bits under an error-correcting code; empty for a plain method. */
+function measureChannel(
+  attacked: RgbaImage,
+  expectedFrame: Uint8Array,
+  method: ConfiguredMethod,
+): { channelBer?: number } {
+  const corrected = errorCorrectionOf(method);
+  if (!corrected) return {};
+  const coded = corrected.code.encode(expectedFrame);
+  return { channelBer: bitErrorRate(coded, corrected.inner.extract(attacked, coded.length)) };
 }

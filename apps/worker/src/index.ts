@@ -6,16 +6,19 @@ import {
 } from "@stego/db";
 import {
   createMessageHandoff,
+  createProgressStore,
   createRedisStore,
   createRedisWakeSource,
   keepConnected,
 } from "@stego/kv";
 import { createS3ObjectStore } from "@stego/storage";
 import { RedisClient } from "bun";
+import { cleanupExpiredVariants } from "./cleanup.ts";
 import { loadEnv } from "./env.ts";
 import type { JobHandlers } from "./handlers.ts";
 import { createDecodeHandler } from "./operations/decode.ts";
 import { createEncodeHandler } from "./operations/encode.ts";
+import { createExperimentHandler } from "./operations/experiment.ts";
 import { createWorker } from "./worker.ts";
 
 const env = loadEnv();
@@ -35,10 +38,10 @@ const storage = createS3ObjectStore({
 });
 const images = createImageRepository(sql);
 const operations = createOperationRepository(sql);
-// The experiment handler is registered here when the lab lands.
 const handlers: JobHandlers = {
   encode: createEncodeHandler({ images, operations, storage }),
   decode: createDecodeHandler({ images, storage }),
+  experiment: createExperimentHandler({ images, storage, progress: createProgressStore(kv) }),
 };
 const worker = createWorker({
   queue: createJobQueue(sql),
@@ -49,11 +52,22 @@ const worker = createWorker({
   jobTimeoutMs: env.WORKER_JOB_TIMEOUT_MS,
 });
 
+// Attacked images of the lab expire after a day; a run that fails is retried on the next tick.
+const variantCleanup = Bun.cron("*/15 * * * *", async () => {
+  try {
+    const removed = await cleanupExpiredVariants({ images, storage });
+    if (removed > 0) console.info(`Removed ${removed} expired variant image(s)`);
+  } catch (error) {
+    console.error("Expired variant cleanup failed", error);
+  }
+});
+
 const stopListening = createRedisWakeSource(subscriber).listen(() => worker.wake());
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {
     console.info(`${signal} received, finishing the current job`);
+    variantCleanup.stop();
     worker.stop();
   });
 }

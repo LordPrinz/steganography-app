@@ -163,7 +163,10 @@ describe.each(codeCases)("stego codec with $name over LSB", ({ code, block, data
     (seed) => {
       const stego = attacked((raw) => flipPerCodeword(raw, codedBits, block, corrects, seed));
       expect(reveal(stego, method)).toEqual({ ok: true, message });
-      expect(measure(stego, message, method)).toEqual({ ok: true, ber: 0 });
+      const measured = measure(stego, message, method);
+      expect(measured).toMatchObject({ ok: true, ber: 0 });
+      // The code fixed real channel errors, which the channel BER shows.
+      expect(measured.channelBer).toBeGreaterThan(0);
     },
   );
 

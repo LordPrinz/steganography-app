@@ -153,6 +153,8 @@ export function createImageService({
       // Ownership first: a URL is only signed for the owner's own row.
       const row = await images.findOwned(userId, id);
       if (!row) return null;
+      // An expired variant is gone for the user even before the worker's sweep removes it.
+      if (row.expires_at && row.expires_at.getTime() <= now()) return null;
       const url = await storage.presignGet(row.storage_key, urlTtlSeconds);
       return {
         ...toImageMeta(row),

@@ -250,6 +250,49 @@ each kernel with a naive TS oracle, and an ASan/UBSan harness checks memory safe
   - `DELETE` removes only a succeeded or failed operation (204; its job goes with it, the images stay in the
     gallery). A queued or running one is a 409 `operation_active`, because the worker still writes to it.
     Another user's operation is a 404. The cached view and any revealed message are dropped with the row.
+- Robustness lab (`POST /api/v1/experiments`, `GET /api/v1/experiments/:id`):
+  - Mode A hides the message with every registered method (default parameters, no code) and attacks each
+    stego image with the 11 default scenarios (no attack, JPEG 90/75/50, resize 0.75/0.5, blur 0.5/1/2,
+    resize 0.5 + JPEG 75, blur 1 + JPEG 75): 33 variants. Mode B takes one method with its parameters and
+    optional code, plus 1 to 16 scenarios that chain at most 48 attacks in total (400 `invalid_request`). The API expands both into explicit `methods` and `scenarios`
+    lists in `operations.params`, so a later change to the defaults cannot alter a queued job. The code
+    sits next to the method id, as in encode.
+  - Limits: an image of at most 1024 x 1024 pixels (422 `experiment_image_too_large`, with `pixels` and
+    `maxPixels`), at most 36 variants (400 `too_many_variants`), and a message that fits every method it
+    runs (422 `message_too_large` with `needed`, `available` and the `method` that failed first; in mode A
+    a small image can fail on the DCT or DWT while LSB would fit). Experiments share the cap of 5 queued or
+    running operations with encode and decode. They have their own rate limit, 20 per hour per user
+    (`experiment-user`), charged before validation like encode. An image with a side under 11 pixels is
+    refused too (422 `experiment_image_too_small`, with `minSide`), because SSIM is undefined there. The
+    worker checks both image limits again (`image_too_large`, `image_too_small`).
+  - The source of an experiment or an encode must be an original or stego image: a variant is a 404
+    `image_not_found` there. A decode may take a variant, so the user can try to read what survived.
+  - The message follows the encode path: Redis only, never `operations.params`, the result or the logs.
+  - The worker hides the message once per method, then for each scenario attacks the stego image, reads the
+    message back with `measure` and compares the attacked image with the cover (PSNR, SSIM). `result` holds
+    per-variant metrics, per-method embedding metrics and aggregates (success rate and mean BER per method
+    and scenario, with the attack type and its strength for a table or a line chart). It has no message.
+  - Every attacked image is stored as an `images` row of kind `variant` with `expires_at` 24 hours ahead.
+    Variants are not in the gallery and not in the image quota (the gallery index is partial, `WHERE kind
+    <> 'variant'`). They have their own cap: 512 MiB of unexpired variant bytes per user, checked in
+    `createVariant` under the same per-user row lock as uploads. Over the cap the image is not stored,
+    the variant's `imageId` is `null` and the experiment goes on with its metrics. A worker cron (`Bun.cron`, every 15 minutes) deletes expired variants, object first and
+    row second, so a failure leaves a row the next run retries. Batches page by `(expires_at, id)`, so a
+    row that keeps failing does not hold back newer ones. An expired variant is served by no endpoint
+    (no URL) even before the sweep removes it. A retried job (after a crash) may leave
+    the variants of the failed attempt behind; they count against the 512 MiB cap until they expire with
+    the TTL like the rest. Deleting an
+    experiment from the history does not delete its variants; they also expire.
+  - Progress is `{ done, total }` under `op:{id}:progress` in Redis (TTL 10 min, refreshed after every
+    variant) and only shown while the operation is queued or running. If Redis fails, the job goes on
+    without reporting.
+  - `GET /experiments/:id` is owner-scoped (404 for another user's, a missing id, or an operation that is
+    not an experiment) and answers with `Cache-Control: no-store`. A finished experiment's stored fields
+    use the same cache-aside entry as other operations; the presigned variant URLs are made per request and
+    left out for variants that expired. The history lists experiments with `type=experiment` (`method` is
+    `auto` for mode A). A history row carries the experiment's `mode`, `messageBytes` and per-method
+    summary but not its `variants` or `aggregates` (up to 36 variants per row would bloat a page of 100);
+    the full result is on `GET /experiments/:id`.
 - The hidden message is **never** stored in the database.
 
 ### Web sessions
@@ -274,13 +317,14 @@ A library is added only when Bun has no equivalent (zod for validation, Next.js 
 
 ## Metrics
 
-| Metric         | Meaning                                                                                                                                 |
-| -------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Decode success | Frame decoded and CRC matches                                                                                                           |
-| BER            | Share of payload bits (UTF-8 message, no header or CRC) read wrong, after decoding when a code is used; defined even when the CRC fails |
-| PSNR / SSIM    | Visual quality, computed on luminance                                                                                                   |
-| Capacity       | UTF-8 message bytes that fit, after the error-correcting code (if any) and frame overhead                                               |
-| Time           | Encode / decode duration                                                                                                                |
+| Metric         | Meaning                                                                                                                                                                                                                         |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Decode success | Frame decoded and CRC matches                                                                                                                                                                                                   |
+| BER            | Share of payload bits (UTF-8 message, no header or CRC) read wrong, after decoding when a code is used; defined even when the CRC fails                                                                                         |
+| Channel BER    | With an error-correcting code only: share of coded bits the inner method read wrong, over the whole expected frame (header, payload, CRC), before the code corrects anything. Compared with BER it shows what the code absorbed |
+| PSNR / SSIM    | Visual quality, computed on luminance                                                                                                                                                                                           |
+| Capacity       | UTF-8 message bytes that fit, after the error-correcting code (if any) and frame overhead                                                                                                                                       |
+| Time           | Encode / decode duration                                                                                                                                                                                                        |
 
 PSNR and SSIM compare the luminance (Y, as the transform methods use it) of cover and stego image; alpha
 is ignored. PSNR is `Infinity` for identical images. SSIM uses the parameters of Wang et al. 2004 (11 × 11
@@ -293,5 +337,7 @@ as `psnr`, `ssim` and `ber`.
 
 Defined in `packages/db/migrations/*.sql`, mirrored by row types in `packages/db/src/types.ts`:
 `users`, `refresh_tokens`, `images`, `operations` (user-visible history), `jobs` (work queue).
+`images.expires_at` is set for `variant` images (attacked images of the lab) and null for every other kind;
+a check constraint keeps the two in step, and a partial index serves the worker's expiry sweep.
 Queries are tagged-template SQL (`` sql`SELECT … WHERE id = ${id}` ``), parameterised by Bun.
 Migrations are forward-only; an applied file is checksummed and must never be edited.
