@@ -9,7 +9,9 @@ const kv = createMemoryStore();
 const storage = createMemoryObjectStore();
 const server = createServer(testServerDeps({ kv, storage }));
 const redisDown = createServer(testServerDeps({ kv: { ...kv, ping: async () => false }, storage }));
-const storageDown = createServer(testServerDeps({ kv, storage: { ping: async () => false } }));
+const storageDown = createServer(
+  testServerDeps({ kv, storage: { ...storage, ping: async () => false } }),
+);
 afterAll(() => {
   server.stop(true);
   redisDown.stop(true);
