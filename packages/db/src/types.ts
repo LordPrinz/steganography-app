@@ -33,6 +33,8 @@ export interface ImageRow {
   height: number;
   size_bytes: number;
   sha256: string;
+  /** Set for a `variant` (deleted after it), null for every other kind. */
+  expires_at: Date | null;
   created_at: Date;
 }
 

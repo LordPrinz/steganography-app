@@ -4,7 +4,12 @@ import type {
   RefreshTokenRepository,
   UserRepository,
 } from "@stego/db";
-import { createMessageHandoff, type KeyValueStore, type WakePublisher } from "@stego/kv";
+import {
+  createMessageHandoff,
+  createProgressStore,
+  type KeyValueStore,
+  type WakePublisher,
+} from "@stego/kv";
 import type { ObjectStore } from "@stego/storage";
 import { type ConcurrencyLimit, createConcurrencyLimit } from "./lib/concurrency-limit.ts";
 import { requireOrigin } from "./lib/csrf.ts";
@@ -12,6 +17,7 @@ import { API_PREFIX, errorResponse, HttpError, mount } from "./lib/http.ts";
 import { authRoutes, createRequireUser } from "./modules/auth/routes.ts";
 import { createAuthService } from "./modules/auth/service.ts";
 import { createAccessTokens } from "./modules/auth/tokens.ts";
+import { experimentRoutes } from "./modules/experiments/routes.ts";
 import { healthRoutes } from "./modules/health/routes.ts";
 import { imageRoutes, MAX_REQUEST_BYTES } from "./modules/images/routes.ts";
 import { createImageService, type ImageLimits } from "./modules/images/service.ts";
@@ -83,6 +89,7 @@ export function createServer({
     handoff: createMessageHandoff(kv),
     wake,
     kv,
+    progress: createProgressStore(kv),
   });
 
   return Bun.serve({
@@ -106,6 +113,7 @@ export function createServer({
         ),
         ...mount(API_PREFIX, imageRoutes({ images: imageService, kv, requireUser })),
         ...mount(API_PREFIX, operationRoutes({ operations: operationService, kv, requireUser })),
+        ...mount(API_PREFIX, experimentRoutes({ operations: operationService, kv, requireUser })),
       },
       appOrigin,
     ),

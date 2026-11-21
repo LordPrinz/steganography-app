@@ -257,19 +257,15 @@ describe.each(backends)("operations history API (%s)", (name, backend) => {
       }
     });
 
-    test.each([
-      "limit=0",
-      "limit=101",
-      "limit=abc",
-      "type=experiment",
-      "method=rot13",
-      "status=done",
-    ])("rejects the query %s", async (query) => {
-      const { ann } = await start();
-      const res = await ann.request("GET", `/operations?${query}`);
-      expect(res.status).toBe(400);
-      expect(await errorCode(res)).toBe("invalid_request");
-    });
+    test.each(["limit=0", "limit=101", "limit=abc", "type=rot13", "method=rot13", "status=done"])(
+      "rejects the query %s",
+      async (query) => {
+        const { ann } = await start();
+        const res = await ann.request("GET", `/operations?${query}`);
+        expect(res.status).toBe(400);
+        expect(await errorCode(res)).toBe("invalid_request");
+      },
+    );
 
     test("leaves out the message, URLs and revealed text, and is not cached", async () => {
       const { deps, ann, encode, decode } = await start();

@@ -1,12 +1,29 @@
 import { describe, expect, test } from "bun:test";
-import { AUTO_SELECTIONS, MethodSelection } from "@stego/contracts";
-import type { ImageRow, OperationRepository, OperationRow, OperationView } from "@stego/db";
+import { AUTO_SELECTIONS, type ImageDetail, MethodSelection } from "@stego/contracts";
+import type {
+  ImageRow,
+  NewOperation,
+  OperationRepository,
+  OperationRow,
+  OperationView,
+} from "@stego/db";
 import { createMethod } from "@stego/engine";
-import { createMemoryStore, createMessageHandoff, type KeyValueStore } from "@stego/kv";
+import {
+  createMemoryStore,
+  createMessageHandoff,
+  createProgressStore,
+  type KeyValueStore,
+} from "@stego/kv";
+import type { ImageService } from "../images/service.ts";
 import {
   createOperationService,
+  ExperimentImageTooLargeError,
+  ExperimentImageTooSmallError,
+  MessageTooLargeError,
   OperationActiveError,
+  SourceNotFoundError,
   TooManyActiveOperationsError,
+  TooManyVariantsError,
 } from "./service.ts";
 
 const USER = crypto.randomUUID();
@@ -37,6 +54,11 @@ function setup({
   rows = [] as OperationView[],
   create = async (): Promise<OperationRow | null> => view(),
   kv = createMemoryStore() as KeyValueStore,
+  imageUrls = { get: async () => null } as Pick<ImageService, "get">,
+  maxVariants = undefined as number | undefined,
+  listed = [] as OperationView[],
+  source = image,
+  now = undefined as (() => number) | undefined,
 } = {}) {
   const events: string[] = [];
   let lookups = 0;
@@ -52,7 +74,7 @@ function setup({
       return rows.find((row) => row.id === id && row.user_id === userId) ?? null;
     },
     async listPage() {
-      return { operations: [], next: null };
+      return { operations: listed, next: null };
     },
     async deleteFinishedOwned(userId, id) {
       const row = rows.find((r) => r.id === id && r.user_id === userId);
@@ -63,12 +85,15 @@ function setup({
   const service = createOperationService({
     operations,
     images: {
-      findOwned: async (userId, id) => (userId === USER && id === IMAGE_ID ? image : null),
+      findOwned: async (userId, id) => (userId === USER && id === IMAGE_ID ? source : null),
     },
-    imageUrls: { get: async () => null },
+    imageUrls,
     handoff: createMessageHandoff(kv),
     wake: { notify: async () => void events.push("notify") },
     kv,
+    progress: createProgressStore(kv),
+    maxVariants,
+    now,
     log: silent,
   });
   return { service, events, kv, lookups: () => lookups, handoff: createMessageHandoff(kv) };
@@ -289,5 +314,257 @@ describe("method selections", () => {
     ]) {
       expect(MethodSelection.safeParse(selection).success).toBe(false);
     }
+  });
+});
+
+describe("experiment", () => {
+  const lsbB = (scenarios: unknown[][], message = "hi") =>
+    ({
+      mode: "B",
+      imageId: IMAGE_ID,
+      message,
+      method: MethodSelection.parse({ id: "lsb" }),
+      scenarios,
+    }) as Parameters<ReturnType<typeof setup>["service"]["experiment"]>[1];
+
+  test("refuses more variants than allowed before looking at capacity", async () => {
+    const { service, events } = setup({ maxVariants: 10 });
+    const error = await service
+      .experiment(USER, { mode: "A", imageId: IMAGE_ID, message: "hi" })
+      .catch((e) => e);
+    expect(error).toBeInstanceOf(TooManyVariantsError);
+    expect(error).toMatchObject({ variants: 33, maxVariants: 10 });
+    await expect(service.experiment(USER, lsbB([[], [], []]))).resolves.toBeDefined();
+    expect(events).toContain("create");
+  });
+
+  test("refuses an image over the pixel limit and one that is not the user's", async () => {
+    const big = { ...image, width: 1025, height: 1024 } as ImageRow;
+    const { service } = setup();
+    const huge = createOperationService({
+      operations: {} as OperationRepository,
+      images: { findOwned: async () => big },
+      imageUrls: { get: async () => null },
+      handoff: createMessageHandoff(createMemoryStore()),
+      wake: { notify: async () => {} },
+      kv: createMemoryStore(),
+      progress: createProgressStore(createMemoryStore()),
+      log: silent,
+    });
+    await expect(huge.experiment(USER, lsbB([[]]))).rejects.toThrow(ExperimentImageTooLargeError);
+    await expect(service.experiment(OTHER, lsbB([[]]))).rejects.toThrow(SourceNotFoundError);
+  });
+
+  test("names the method that cannot hold the message and drops nothing in Redis", async () => {
+    const kv = createMemoryStore();
+    const { service, events } = setup({ kv });
+    const error = await service
+      .experiment(USER, { mode: "A", imageId: IMAGE_ID, message: "hi" })
+      .catch((e) => e);
+    // 64 x 64 holds an LSB frame, but not one in the DCT's 64 bits.
+    expect(error).toBeInstanceOf(MessageTooLargeError);
+    expect(error).toMatchObject({ needed: 2, available: 0, method: "dct-koch-zhao" });
+    expect(events).toEqual([]);
+  });
+
+  test("stores the expanded lists, the method of mode B and no message", async () => {
+    let stored: NewOperation | undefined;
+    const spy = createOperationService({
+      operations: {
+        createWithJob: async (op: NewOperation) => {
+          stored = op;
+          return view({ id: op.id });
+        },
+      } as unknown as OperationRepository,
+      images: { findOwned: async () => image },
+      imageUrls: { get: async () => null },
+      handoff: createMessageHandoff(createMemoryStore()),
+      wake: { notify: async () => {} },
+      kv: createMemoryStore(),
+      progress: createProgressStore(createMemoryStore()),
+      log: silent,
+    });
+    await spy.experiment(USER, lsbB([[], [{ type: "blur", sigma: 1 }]], "very secret"));
+    expect(stored).toMatchObject({ type: "experiment", method: "lsb", sourceImageId: IMAGE_ID });
+    expect(stored?.params).toEqual({
+      mode: "B",
+      methods: [{ id: "lsb", params: { bitsPerChannel: 1 } }],
+      scenarios: [[], [{ type: "blur", sigma: 1 }]],
+    });
+    expect(JSON.stringify(stored)).not.toContain("secret");
+  });
+
+  describe("getExperiment", () => {
+    const variantImage = (id: string) => ({ id, url: `https://files.test/${id}` }) as ImageDetail;
+    const variantResult = (ids: (string | null)[]) => ({
+      kind: "experiment",
+      mode: "B",
+      messageBytes: 2,
+      methods: [],
+      aggregates: [],
+      variants: ids.map((imageId) => ({
+        method: "lsb",
+        ecc: null,
+        scenario: [],
+        label: "none",
+        success: true,
+        ber: 0,
+        channelBer: null,
+        psnr: 40,
+        ssim: 1,
+        timeMs: 1,
+        imageId,
+      })),
+    });
+
+    test("is null for another user's operation and for other types", async () => {
+      const mine = view({ type: "experiment" });
+      const decode = view({ type: "decode" });
+      const { service } = setup({ rows: [mine, decode] });
+      expect(await service.getExperiment(OTHER, mine.id)).toBeNull();
+      expect(await service.getExperiment(USER, decode.id)).toBeNull();
+      expect(await service.getExperiment(USER, crypto.randomUUID())).toBeNull();
+      expect(await service.getExperiment(USER, mine.id)).toMatchObject({ id: mine.id });
+    });
+
+    test("shows progress only while queued or running", async () => {
+      const kv = createMemoryStore();
+      const running = view({ type: "experiment", status: "running" });
+      const done = view({ type: "experiment", status: "succeeded" });
+      const { service } = setup({ kv, rows: [running, done] });
+      const progress = createProgressStore(kv);
+      await progress.put(running.id, { done: 4, total: 33 });
+      await progress.put(done.id, { done: 33, total: 33 });
+      expect((await service.getExperiment(USER, running.id))?.progress).toEqual({
+        done: 4,
+        total: 33,
+      });
+      expect((await service.getExperiment(USER, done.id))?.progress).toBeNull();
+    });
+
+    test("presigns the variants that still exist and leaves out the rest", async () => {
+      const [a, b, gone] = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()];
+      const row = view({
+        type: "experiment",
+        status: "succeeded",
+        result: variantResult([a, b, gone, null, a]),
+      });
+      const { service } = setup({
+        rows: [row],
+        imageUrls: { get: async (_user, id) => (id === gone ? null : variantImage(id)) },
+      });
+      const experiment = await service.getExperiment(USER, row.id);
+      expect(Object.keys(experiment?.variantImages ?? {}).sort()).toEqual([a, b].sort());
+      expect(experiment?.variantImages[a]?.url).toBe(`https://files.test/${a}`);
+      expect(experiment).not.toHaveProperty("resultImageId");
+    });
+
+    test("caches a finished experiment but presigns fresh URLs every time", async () => {
+      const id = crypto.randomUUID();
+      const row = view({
+        type: "experiment",
+        status: "succeeded",
+        result: variantResult([id]),
+      });
+      let presigned = 0;
+      const { service, lookups } = setup({
+        rows: [row],
+        imageUrls: {
+          get: async (_user, imageId) => {
+            presigned++;
+            return variantImage(imageId);
+          },
+        },
+      });
+      await service.getExperiment(USER, row.id);
+      await service.getExperiment(USER, row.id);
+      expect(lookups()).toBe(1);
+      expect(presigned).toBe(2);
+    });
+  });
+
+  test("the history list leaves out variants and aggregates, keeping the rest of the result", async () => {
+    const full = {
+      kind: "experiment",
+      mode: "A",
+      messageBytes: 2,
+      methods: [],
+      aggregates: [
+        {
+          method: "lsb",
+          ecc: null,
+          attack: "none",
+          strength: null,
+          label: "none",
+          successRate: 1,
+          meanBer: 0,
+          variants: 1,
+        },
+      ],
+      variants: [
+        {
+          method: "lsb",
+          ecc: null,
+          scenario: [],
+          label: "none",
+          success: true,
+          ber: 0,
+          channelBer: null,
+          psnr: 40,
+          ssim: 1,
+          timeMs: 1,
+          imageId: null,
+        },
+      ],
+    };
+    const row = view({ type: "experiment", status: "succeeded", result: full });
+    const { service } = setup({ listed: [row], rows: [row] });
+    const page = await service.list(USER, { limit: 10 });
+    expect(page.operations[0]?.result).toEqual({
+      kind: "experiment",
+      mode: "A",
+      messageBytes: 2,
+      methods: [],
+    });
+    // The experiment endpoint still has all of it.
+    const experiment = await service.getExperiment(USER, row.id);
+    expect(experiment?.result).toMatchObject({ variants: [{}], aggregates: [{}] });
+  });
+
+  test("refuses a variant as the source of an encode or an experiment, not of a decode", async () => {
+    const variant = { ...image, kind: "variant" } as ImageRow;
+    const { service } = setup({ source: variant });
+    await expect(
+      service.encode(USER, {
+        imageId: IMAGE_ID,
+        message: "hi",
+        layers: [MethodSelection.parse({ id: "lsb" })],
+      }),
+    ).rejects.toThrow(SourceNotFoundError);
+    await expect(service.experiment(USER, lsbB([[]]))).rejects.toThrow(SourceNotFoundError);
+    await expect(
+      service.decode(USER, { imageId: IMAGE_ID, method: "auto" }),
+    ).resolves.toBeDefined();
+  });
+
+  test("refuses an expired variant even for a decode", async () => {
+    const expiresAt = new Date("2026-11-20T12:00:00Z");
+    const variant = { ...image, kind: "variant", expires_at: expiresAt } as ImageRow;
+    const at = (ms: number) => setup({ source: variant, now: () => ms });
+    const live = at(expiresAt.getTime() - 1);
+    await expect(
+      live.service.decode(USER, { imageId: IMAGE_ID, method: "auto" }),
+    ).resolves.toBeDefined();
+    const gone = at(expiresAt.getTime());
+    await expect(gone.service.decode(USER, { imageId: IMAGE_ID, method: "auto" })).rejects.toThrow(
+      SourceNotFoundError,
+    );
+  });
+
+  test("refuses an image with a side under 11 pixels", async () => {
+    const { service } = setup({ source: { ...image, width: 10, height: 64 } as ImageRow });
+    await expect(service.experiment(USER, lsbB([[]]))).rejects.toThrow(
+      ExperimentImageTooSmallError,
+    );
   });
 });

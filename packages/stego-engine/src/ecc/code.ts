@@ -21,6 +21,21 @@ function assertWithin(bitCount: number, capacity: number): void {
   }
 }
 
+const wrapped = new WeakMap<
+  ConfiguredMethod,
+  { inner: ConfiguredMethod; code: ErrorCorrectingCode }
+>();
+
+/**
+ * The method and code behind a method built by `withErrorCorrection`, or undefined for any other
+ * method. Lets `measure` read the raw channel under the code.
+ */
+export function errorCorrectionOf(
+  method: ConfiguredMethod,
+): { readonly inner: ConfiguredMethod; readonly code: ErrorCorrectingCode } | undefined {
+  return wrapped.get(method);
+}
+
 /**
  * `method` with `code` applied to every bit it embeds. Capacity shrinks by the code rate, so the
  * codec's `capacity` reports message bytes after both the code and the frame overhead.
@@ -31,7 +46,7 @@ export function withErrorCorrection(
 ): ConfiguredMethod {
   const capacityBits = (width: number, height: number) =>
     code.dataBits(method.capacityBits(width, height));
-  return {
+  const corrected: ConfiguredMethod = {
     id: method.id,
     capacityBits,
     embed: (image, bits) => {
@@ -43,4 +58,6 @@ export function withErrorCorrection(
       return code.decode(method.extract(image, code.codeBits(bitCount)), bitCount);
     },
   };
+  wrapped.set(corrected, { inner: method, code });
+  return corrected;
 }

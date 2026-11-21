@@ -191,6 +191,122 @@ describe.each(backends)("image repository (%s)", (_name, make) => {
     expect(await images.usage(userId)).toEqual({ count: 2, bytes: 350 });
   });
 
+  describe("variants", () => {
+    const { kind: _, ...variantInput } = newImage("unused");
+
+    async function addVariant(userId: string, ttlMs = 60_000, sizeBytes = 100) {
+      const row = await images.createVariant(
+        {
+          ...variantInput,
+          sizeBytes,
+          userId,
+          storageKey: `users/${userId}/${crypto.randomUUID()}.png`,
+        },
+        { ttlMs, maxBytes: 1e12 },
+      );
+      return row as ImageRow;
+    }
+
+    test("createVariant stores an expiring variant row", async () => {
+      const userId = await backend.newUser();
+      const before = Date.now();
+      const row = await addVariant(userId, 60_000);
+      expect(row.kind).toBe("variant");
+      expect(row.expires_at).toBeInstanceOf(Date);
+      const expiresIn = (row.expires_at as Date).getTime() - before;
+      expect(expiresIn).toBeGreaterThan(55_000);
+      expect(expiresIn).toBeLessThan(65_000);
+      expect(await images.findOwned(userId, row.id)).toEqual(row);
+    });
+
+    test("other kinds never expire", async () => {
+      const userId = await backend.newUser();
+      expect((await add(images, userId)).expires_at).toBeNull();
+    });
+
+    test("variants are not in the gallery and do not count against the quota", async () => {
+      const userId = await backend.newUser();
+      const mine = await add(images, userId, newImage(userId, { sizeBytes: 100 }));
+      for (let i = 0; i < 3; i++) await addVariant(userId);
+
+      expect((await images.listPage(userId, { limit: 10 })).images.map((r) => r.id)).toEqual([
+        mine.id,
+      ]);
+      expect(await images.usage(userId)).toEqual({ count: 1, bytes: 100 });
+      const quota = { maxImages: 2, maxBytes: 1e12 };
+      expect(await images.create(newImage(userId), quota)).not.toBeNull();
+    });
+
+    test("createVariant refuses a variant that takes the user over the live byte cap", async () => {
+      const userId = await backend.newUser();
+      const other = await backend.newUser();
+      const input = (user: string, sizeBytes: number) => ({
+        ...variantInput,
+        sizeBytes,
+        userId: user,
+        storageKey: `users/${user}/${crypto.randomUUID()}.png`,
+      });
+      const cap = { maxBytes: 250 };
+      expect(
+        await images.createVariant(input(userId, 100), { ttlMs: 60_000, ...cap }),
+      ).not.toBeNull();
+      expect(
+        await images.createVariant(input(userId, 100), { ttlMs: 60_000, ...cap }),
+      ).not.toBeNull();
+      expect(await images.createVariant(input(userId, 100), { ttlMs: 60_000, ...cap })).toBeNull();
+      expect(
+        await images.createVariant(input(userId, 50), { ttlMs: 60_000, ...cap }),
+      ).not.toBeNull();
+      // Per user, and other kinds do not count.
+      expect(
+        await images.createVariant(input(other, 100), { ttlMs: 60_000, ...cap }),
+      ).not.toBeNull();
+      await add(images, userId, newImage(userId, { sizeBytes: 1_000 }));
+    });
+
+    test("expired variants no longer count against the cap", async () => {
+      const userId = await backend.newUser();
+      const input = {
+        ...variantInput,
+        sizeBytes: 100,
+        userId,
+        storageKey: `users/${userId}/${crypto.randomUUID()}.png`,
+      };
+      expect(await images.createVariant(input, { ttlMs: 1, maxBytes: 100 })).not.toBeNull();
+      await Bun.sleep(10);
+      const next = { ...input, storageKey: `users/${userId}/${crypto.randomUUID()}.png` };
+      expect(await images.createVariant(next, { ttlMs: 60_000, maxBytes: 100 })).not.toBeNull();
+    });
+
+    test("listExpired continues after a cursor in (expires_at, id) order", async () => {
+      const userId = await backend.newUser();
+      const rows = [];
+      for (let i = 0; i < 4; i++) rows.push(await addVariant(userId, 500 + i));
+      const later = new Date(Date.now() + 10_000);
+      const first = await images.listExpired(later, 2);
+      expect(first.map((r) => r.id)).toEqual(rows.slice(0, 2).map((r) => r.id));
+      const last = first.at(-1) as ImageRow;
+      const second = await images.listExpired(later, 10, {
+        expiresAt: last.expires_at as Date,
+        id: last.id,
+      });
+      expect(second.map((r) => r.id)).toEqual(rows.slice(2).map((r) => r.id));
+    });
+
+    test("listExpired returns only variants past their expiry, oldest first", async () => {
+      const userId = await backend.newUser();
+      const soon = await addVariant(userId, 1_000);
+      const sooner = await addVariant(userId, 500);
+      await addVariant(userId, 3_600_000);
+      await add(images, userId);
+
+      const later = new Date(Date.now() + 10_000);
+      expect((await images.listExpired(later, 10)).map((r) => r.id)).toEqual([sooner.id, soon.id]);
+      expect(await images.listExpired(later, 1)).toHaveLength(1);
+      expect(await images.listExpired(new Date(Date.now() - 1_000), 10)).toEqual([]);
+    });
+  });
+
   test("create refuses an image over the count quota", async () => {
     const userId = await backend.newUser();
     const quota = { maxImages: 2, maxBytes: 1e12 };

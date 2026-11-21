@@ -8,6 +8,9 @@ import {
   measure,
   reveal,
 } from "./codec.ts";
+import { withErrorCorrection } from "./ecc/code.ts";
+import { repetition } from "./ecc/repetition.ts";
+import { lsb } from "./methods/lsb.ts";
 import { encodeFrame, FRAME_HEADER_BYTES, FRAME_OVERHEAD_BYTES } from "./payload/frame.ts";
 import { noiseImage } from "./testing/images.ts";
 import { methodCases } from "./testing/methods.ts";
@@ -238,7 +241,7 @@ describe.each(methodCases)("stego codec: $name", ({ method, coverSize }) => {
   describe("measure", () => {
     test("gives BER 0 without an attack", () => {
       const stego = hide(cover, "secret", method);
-      expect(measure(stego, "secret", method)).toEqual({ ok: true, ber: 0 });
+      expect(measure(stego, "secret", method)).toMatchObject({ ok: true, ber: 0 });
     });
 
     test("counts flipped payload bits even when the CRC fails", () => {
@@ -246,7 +249,7 @@ describe.each(methodCases)("stego codec: $name", ({ method, coverSize }) => {
       let stego = hide(cover, message, method);
       stego = flipFrameBit(cover, stego, method, HEADER_BITS + 1);
       stego = flipFrameBit(cover, stego, method, HEADER_BITS + 20);
-      expect(measure(stego, message, method)).toEqual({
+      expect(measure(stego, message, method)).toMatchObject({
         ok: false,
         error: "corrupted",
         ber: 2 / (message.length * 8),
@@ -271,7 +274,7 @@ describe.each(methodCases)("stego codec: $name", ({ method, coverSize }) => {
     });
 
     test("gives BER 0 for an empty expected message", () => {
-      expect(measure(cover, "", method)).toEqual({ ok: false, error: "no-message", ber: 0 });
+      expect(measure(cover, "", method)).toMatchObject({ ok: false, error: "no-message", ber: 0 });
     });
 
     test("is about 0.5 on a clean image", () => {
@@ -279,5 +282,39 @@ describe.each(methodCases)("stego codec: $name", ({ method, coverSize }) => {
       expect(ber).toBeGreaterThan(0.3);
       expect(ber).toBeLessThan(0.7);
     });
+  });
+});
+
+describe("measure with error correction", () => {
+  const cover = noiseImage(64, 64);
+  const plain = lsb({ bitsPerChannel: 1 });
+  const corrected = withErrorCorrection(plain, repetition({ factor: 5 }));
+  const message = "channel check";
+
+  test("a plain method has no channel BER", () => {
+    expect(measure(hide(cover, message, plain), message, plain)).not.toHaveProperty("channelBer");
+  });
+
+  test("is 0 on an untouched image", () => {
+    expect(measure(hide(cover, message, corrected), message, corrected)).toEqual({
+      ok: true,
+      ber: 0,
+      channelBer: 0,
+    });
+  });
+
+  test("counts raw bit errors the code then corrects", () => {
+    const stego = hide(cover, message, corrected);
+    // Flip two of the five copies of the first payload bit: the vote still wins.
+    const frameBits = (FRAME_OVERHEAD_BYTES + message.length) * 8;
+    const raw = plain.extract(stego, frameBits * 5);
+    const bit = HEADER_BITS * 5;
+    raw[bit] = (raw[bit] as number) ^ 1;
+    raw[bit + 1] = (raw[bit + 1] as number) ^ 1;
+    const damaged = plain.embed(stego, raw);
+
+    const result = measure(damaged, message, corrected);
+    expect(result).toMatchObject({ ok: true, ber: 0 });
+    expect(result.channelBer).toBe(2 / (frameBits * 5));
   });
 });
