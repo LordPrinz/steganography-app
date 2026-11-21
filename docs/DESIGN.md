@@ -132,7 +132,7 @@ each kernel with a naive TS oracle, and an ASan/UBSan harness checks memory safe
     are revoked.
   - CSRF: every state-changing request must carry `Origin: APP_ORIGIN`, otherwise 403. The check wraps
     all routes in `createServer`. Non-browser clients (curl, scripts) have to send the header too.
-  - Request bodies are capped at 64 KiB.
+  - JSON request bodies are capped at 64 KiB.
   - Rate limits (fixed window, Redis), 429 with `Retry-After`: login 20 / 15 min per IP and 10 failures
     / 15 min per e-mail and IP (successful logins do not count), register 5 / hour per IP, refresh
     60 / 15 min per IP. IPv6 clients are counted per /64.
@@ -148,7 +148,14 @@ each kernel with a naive TS oracle, and an ASan/UBSan harness checks memory safe
     keep that.
 - Storage: private bucket, keys `users/{userId}/{uuid}.png`, short-lived presigned URLs issued only
   after an ownership check. Every query by id is scoped to the current user.
-- Uploads: format sniffed from bytes, pixel limit, size limit, metadata stripped.
+- Uploads (`POST /api/v1/images`, multipart field `file`): at most 10 MiB, PNG, JPEG or WebP by magic
+  bytes (the declared type is ignored), at most 4096 × 4096 pixels. The image is decoded and re-encoded as
+  PNG, which drops EXIF and every other metadata chunk; the uploaded bytes are never stored. 60 uploads
+  per hour per user. Bun has one body limit for the whole server, so it is set for uploads (10 MiB plus
+  multipart overhead) and JSON bodies are capped at 64 KiB in `parseBody`.
+- Gallery: `GET /api/v1/images` pages newest first with an opaque keyset cursor on `(created_at, id)`,
+  backed by `images_user_gallery_idx`. Another user's image is a 404, never a 403. Deleting removes the
+  object from storage first, then the row, so a failed delete can be retried.
 - The hidden message is **never** stored in the database.
 
 ### Bun built-ins over libraries

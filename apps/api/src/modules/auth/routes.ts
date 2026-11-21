@@ -5,9 +5,9 @@ import { API_PREFIX, errorResponse, HttpError, json, parseBody } from "../../lib
 import type { KeyValueStore } from "../../lib/kv/store.ts";
 import {
   createRateLimiter,
+  enforce,
   type RateLimiter,
   type RateLimitOptions,
-  type RateLimitResult,
 } from "../../lib/rate-limit.ts";
 import type { AuthService, Session } from "./service.ts";
 
@@ -172,21 +172,4 @@ export function authRoutes({
       GET: async (req: BunRequest) => json<AuthResponse>({ user: await requireUser(req) }),
     },
   };
-}
-
-async function enforce(check: () => Promise<RateLimitResult>): Promise<void> {
-  let result: RateLimitResult;
-  try {
-    result = await check();
-  } catch (error) {
-    // ADR 0003: counters live in Redis. While it is down, requests pass rather than locking everyone out.
-    console.error("Rate limiter unavailable; letting the request through", error);
-    return;
-  }
-  if (!result.allowed) {
-    const retryAfter = Math.max(1, Math.ceil(result.retryAfterMs / 1000));
-    throw new HttpError(429, "rate_limited", "Too many requests", undefined, {
-      "Retry-After": String(retryAfter),
-    });
-  }
 }

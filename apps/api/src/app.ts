@@ -1,23 +1,25 @@
-import type { RefreshTokenRepository, UserRepository } from "@stego/db";
+import type { ImageRepository, RefreshTokenRepository, UserRepository } from "@stego/db";
 import type { ObjectStore } from "@stego/storage";
 import { requireOrigin } from "./lib/csrf.ts";
 import { API_PREFIX, errorResponse, HttpError, mount } from "./lib/http.ts";
 import type { KeyValueStore } from "./lib/kv/store.ts";
-import { authRoutes } from "./modules/auth/routes.ts";
+import { authRoutes, createRequireUser } from "./modules/auth/routes.ts";
 import { createAuthService } from "./modules/auth/service.ts";
 import { createAccessTokens } from "./modules/auth/tokens.ts";
 import { healthRoutes } from "./modules/health/routes.ts";
+import { imageRoutes, MAX_REQUEST_BYTES } from "./modules/images/routes.ts";
+import { createImageService } from "./modules/images/service.ts";
 
 const ACCESS_TTL_SECONDS = 15 * 60;
 const REFRESH_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-// Every body is small JSON so far. Bun applies this server-wide, so image uploads must revisit it.
-const MAX_BODY_BYTES = 64 * 1024;
+const IMAGE_URL_TTL_SECONDS = 10 * 60;
 
 export interface ServerDeps {
   port: number;
   kv: KeyValueStore;
-  storage: Pick<ObjectStore, "ping">;
+  storage: Pick<ObjectStore, "ping" | "put" | "delete" | "presignGet">;
   users: UserRepository;
+  images: ImageRepository;
   refreshTokens: RefreshTokenRepository;
   jwtSecret: string;
   /** The web app's origin: the only one allowed to make state-changing requests. */
@@ -31,6 +33,7 @@ export function createServer({
   kv,
   storage,
   users,
+  images,
   refreshTokens,
   jwtSecret,
   appOrigin,
@@ -44,9 +47,18 @@ export function createServer({
     refreshTtlMs: REFRESH_TTL_MS,
   });
 
+  const requireUser = createRequireUser(auth);
+  const imageService = createImageService({
+    images,
+    storage,
+    urlTtlSeconds: IMAGE_URL_TTL_SECONDS,
+  });
+
   return Bun.serve({
     port,
-    maxRequestBodySize: MAX_BODY_BYTES,
+    // Bun applies one body limit to the whole server, so it is sized for uploads. JSON bodies are held to
+    // 64 KiB by `parseBody`, uploads to MAX_UPLOAD_BYTES by the upload route.
+    maxRequestBodySize: MAX_REQUEST_BYTES,
     routes: requireOrigin(
       {
         ...mount(API_PREFIX, healthRoutes({ kv, storage })),
@@ -61,6 +73,7 @@ export function createServer({
             trustedProxies,
           }),
         ),
+        ...mount(API_PREFIX, imageRoutes({ images: imageService, kv, requireUser })),
       },
       appOrigin,
     ),
