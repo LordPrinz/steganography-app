@@ -11,6 +11,8 @@ import type { DctPair } from "@stego/native";
 import { z } from "zod";
 
 export interface BenchMethod {
+  /** The spec the method was parsed from; a stable key, unlike the report label `params`. */
+  readonly spec: string;
   readonly name: string;
   /** Parameters as shown in reports, e.g. `bits=2` or `LL L2 step=32, ecc=hamming74`. */
   readonly params: string;
@@ -96,12 +98,13 @@ export function parseMethod(spec: string): BenchMethod {
   } catch (cause) {
     throw new Error(`bad parameters for ${name}: ${(cause as Error).message}`, { cause });
   }
-  if (ecc === undefined) return { name, params: built.label, method: built.method };
+  if (ecc === undefined) return { spec, name, params: built.label, method: built.method };
 
   const [codeName = "", arg = ""] = ecc.split(":");
   const code = Object.hasOwn(codes, codeName) ? codes[codeName]?.(arg) : undefined;
   if (!code) throw new Error(`unknown ecc "${codeName}", expected one of ${CODE_NAMES.join(", ")}`);
   return {
+    spec,
     name,
     params: `${built.label}, ecc=${ecc}`,
     method: withErrorCorrection(built.method, code),

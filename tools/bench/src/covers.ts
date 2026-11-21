@@ -1,4 +1,4 @@
-import { readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { extname, join } from "node:path";
 import type { RgbaImage } from "@stego/engine";
 import { decodeRgba } from "@stego/image-io";
@@ -12,6 +12,9 @@ const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
 
 /** Decodes every image file in `paths`; a directory stands for the image files directly in it. */
 export async function loadCovers(paths: readonly string[]): Promise<Cover[]> {
+  for (const path of paths) {
+    if (!existsSync(path)) throw new Error(`no such file or directory: ${path}`);
+  }
   const files = paths.flatMap((path) =>
     statSync(path).isDirectory()
       ? readdirSync(path)

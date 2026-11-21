@@ -2,9 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { parseCli, resolvePlan } from "../src/args.ts";
 import { type BenchRow, runBench } from "../src/run.ts";
 
-/** Mean BER over the images of the one method/attack pair in `rows`. */
-function meanBer(rows: readonly BenchRow[], params: string, attack: string): number {
-  const own = rows.filter((r) => r.params === params && r.attack === attack);
+/** Mean BER over the images of the method with this spec under one attack. Throws if none match. */
+function meanBer(rows: readonly BenchRow[], spec: string, attack: string): number {
+  const own = rows.filter((r) => r.spec === spec && r.attack === attack);
+  if (own.length === 0) throw new Error(`no rows for ${spec} under ${attack}`);
   return own.reduce((sum, r) => sum + r.ber, 0) / own.length;
 }
 
@@ -28,6 +29,7 @@ describe("Koch-Zhao on natural images (ADR 7)", () => {
       "message:32",
     ]);
     expect(rows).toHaveLength(8);
+    expect(rows.filter((r) => r.attack === "none").every((r) => r.success)).toBe(true);
     expect(rows.every((r) => r.success && r.ber === 0)).toBe(true);
   });
 
@@ -58,8 +60,8 @@ describe("Koch-Zhao on natural images (ADR 7)", () => {
       "--payload",
       "fill",
     ]);
-    const weak = meanBer(rows, "(3,2) vs (2,3) P=10", "jpeg75");
-    const strong = meanBer(rows, "(3,2) vs (2,3) P=40", "jpeg75");
+    const weak = meanBer(rows, "kochZhao:strength=10", "jpeg75");
+    const strong = meanBer(rows, "kochZhao", "jpeg75");
     expect(weak).toBeGreaterThan(strong + 0.01);
   });
 });
@@ -76,8 +78,8 @@ describe("Haar DWT + QIM on generated images (ADR 8)", () => {
       "--scenario",
       "jpeg90",
     ]);
-    expect(meanBer(rows, "LL L1 step=32", "none")).toBe(0);
-    expect(meanBer(rows, "LL L1 step=32", "jpeg90")).toBeLessThan(0.001);
+    expect(meanBer(rows, "dwtQim:level=1,step=32", "none")).toBe(0);
+    expect(meanBer(rows, "dwtQim:level=1,step=32", "jpeg90")).toBeLessThan(0.001);
   });
 
   test("a larger step survives JPEG 75 better", async () => {
@@ -91,8 +93,8 @@ describe("Haar DWT + QIM on generated images (ADR 8)", () => {
       "--scenario",
       "jpeg75",
     ]);
-    expect(meanBer(rows, "LL L1 step=64", "jpeg75")).toBeLessThan(
-      meanBer(rows, "LL L1 step=16", "jpeg75"),
+    expect(meanBer(rows, "dwtQim:level=1,step=64", "jpeg75")).toBeLessThan(
+      meanBer(rows, "dwtQim:level=1,step=16", "jpeg75"),
     );
   });
 });

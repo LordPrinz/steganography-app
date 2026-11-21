@@ -7,6 +7,8 @@ import type { BenchScenario } from "./scenarios.ts";
 
 export interface BenchRow {
   readonly image: string;
+  /** Spec of the method, to select rows without relying on the display label. */
+  readonly spec: string;
   readonly method: string;
   readonly params: string;
   readonly attack: string;
@@ -36,7 +38,7 @@ export async function runBench(
 ): Promise<BenchRow[]> {
   const rows: BenchRow[] = [];
   for (const cover of covers) {
-    for (const { name, params, method } of methods) {
+    for (const { spec, name, params, method } of methods) {
       const started = performance.now();
       let embedded: ReturnType<Payload["embed"]>;
       try {
@@ -57,6 +59,7 @@ export async function runBench(
         const { success, ber } = embedded.evaluate(attacked);
         rows.push({
           image: cover.name,
+          spec,
           method: name,
           params,
           attack: scenario.label,
