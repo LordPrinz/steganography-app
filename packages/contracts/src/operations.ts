@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ImageDetail } from "./images.ts";
+import { ImageDetail, MAX_PAGE_SIZE } from "./images.ts";
 import { JobStatus } from "./jobs.ts";
 import { StegoMethod } from "./methods.ts";
 
@@ -144,20 +144,47 @@ export const OperationAccepted = z.object({
 });
 export type OperationAccepted = z.infer<typeof OperationAccepted>;
 
-export const Operation = z.object({
+/** One row of the history: everything stored about an operation, with no URLs and no revealed message. */
+export const OperationSummary = z.object({
   id: z.uuid(),
   type: OperationType,
   status: JobStatus,
   /** The method asked for; "auto" for a decode that tries them all. */
   method: z.union([StegoMethod, z.literal("auto")]),
   sourceImageId: z.uuid().nullable(),
-  /** The stego image of a finished encode, with a fresh presigned URL. */
-  resultImage: ImageDetail.nullable(),
+  resultImageId: z.uuid().nullable(),
+  /** The settings the user chose. Never the hidden message. */
+  params: z.record(z.string(), z.unknown()),
   result: OperationResult.nullable(),
   /** Short public code of a failed job (e.g. `message_expired`). */
   error: z.string().nullable(),
+  createdAt: z.iso.datetime(),
+});
+export type OperationSummary = z.infer<typeof OperationSummary>;
+
+export const ListOperationsQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(MAX_PAGE_SIZE).default(24),
+  /** The opaque `nextCursor` of the previous page. */
+  cursor: z.string().min(1).max(256).optional(),
+  type: OperationType.optional(),
+  /** `auto` selects decodes that try every method. */
+  method: z.union([StegoMethod, z.literal("auto")]).optional(),
+  status: JobStatus.optional(),
+});
+export type ListOperationsQuery = z.infer<typeof ListOperationsQuery>;
+
+export const OperationPage = z.object({
+  operations: z.array(OperationSummary),
+  /** Pass as `cursor` for the next page; null on the last one. */
+  nextCursor: z.string().nullable(),
+});
+export type OperationPage = z.infer<typeof OperationPage>;
+
+/** One operation with a fresh presigned URL for its result image and, for a decode, the revealed message. */
+export const Operation = OperationSummary.omit({ resultImageId: true }).extend({
+  /** The stego image of a finished encode, with a fresh presigned URL. */
+  resultImage: ImageDetail.nullable(),
   /** The decoded message while its short-lived key exists, null afterwards. Never stored in Postgres. */
   revealed: z.string().nullable(),
-  createdAt: z.iso.datetime(),
 });
 export type Operation = z.infer<typeof Operation>;

@@ -37,6 +37,13 @@ describe("message handoff", () => {
     expect(await handoff.getRevealed("op1")).toBeNull();
   });
 
+  test("a revealed message can be dropped at once", async () => {
+    const handoff = createMessageHandoff(createMemoryStore());
+    await handoff.putRevealed("op1", "hello");
+    await handoff.deleteRevealed("op1");
+    expect(await handoff.getRevealed("op1")).toBeNull();
+  });
+
   test("rejects a message over the engine limit, counted in bytes", async () => {
     const handoff = createMessageHandoff(createMemoryStore());
     await handoff.putMessage("op1", "x".repeat(MAX_MESSAGE_BYTES));

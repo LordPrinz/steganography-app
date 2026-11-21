@@ -1,18 +1,27 @@
 import {
   type DecodeRequest,
   type EncodeRequest,
+  type ListOperationsQuery,
   MAX_ACTIVE_OPERATIONS_PER_USER,
   type MethodSelection,
   type Operation,
   type OperationAccepted,
+  type OperationPage,
   OperationResult,
+  OperationSummary,
   OperationType,
-  StegoMethod,
 } from "@stego/contracts";
-import type { ImageRepository, NewOperation, OperationRepository, OperationView } from "@stego/db";
+import type {
+  ImageRepository,
+  KeysetCursor,
+  NewOperation,
+  OperationRepository,
+  OperationView,
+} from "@stego/db";
 import { capacity, createMethod, MAX_MESSAGE_BYTES } from "@stego/engine";
 import type { KeyValueStore, MessageHandoff, WakePublisher } from "@stego/kv";
 import { z } from "zod";
+import { encodeCursor } from "../../lib/cursor.ts";
 import type { ImageService } from "../images/service.ts";
 
 /** The source image does not exist or belongs to someone else. */
@@ -42,6 +51,11 @@ export class TooManyActiveOperationsError extends Error {
   override readonly name = "TooManyActiveOperationsError";
 }
 
+/** The operation is still queued or running; only a finished one can be deleted. */
+export class OperationActiveError extends Error {
+  override readonly name = "OperationActiveError";
+}
+
 export interface OperationService {
   /** Throws `SourceNotFoundError`, `InvalidMethodError`, `MessageTooLargeError` or `TooManyActiveOperationsError`. */
   encode(userId: string, request: EncodeRequest): Promise<OperationAccepted>;
@@ -49,6 +63,15 @@ export interface OperationService {
   decode(userId: string, request: DecodeRequest): Promise<OperationAccepted>;
   /** Null when the operation does not exist or belongs to someone else. */
   get(userId: string, id: string): Promise<Operation | null>;
+  /** Newest first, with no URLs and no revealed message. */
+  list(
+    userId: string,
+    options: Pick<ListOperationsQuery, "limit" | "type" | "status" | "method"> & {
+      after?: KeysetCursor;
+    },
+  ): Promise<OperationPage>;
+  /** Removes the entry, not its images. False when it does not exist or belongs to someone else; throws `OperationActiveError` while it is queued or running. */
+  remove(userId: string, id: string): Promise<boolean>;
 }
 
 export interface OperationServiceDeps {
@@ -56,11 +79,11 @@ export interface OperationServiceDeps {
   images: Pick<ImageRepository, "findOwned">;
   /** Presigns the result image after checking the user owns it. */
   imageUrls: Pick<ImageService, "get">;
-  handoff: Pick<MessageHandoff, "putMessage" | "deleteMessage" | "getRevealed">;
+  handoff: Pick<MessageHandoff, "putMessage" | "deleteMessage" | "getRevealed" | "deleteRevealed">;
   /** Told after each new job committed, so an idle worker picks it up without waiting for its poll. */
   wake: WakePublisher;
   /** Caches finished operations for polling. */
-  kv: Pick<KeyValueStore, "get" | "set">;
+  kv: Pick<KeyValueStore, "get" | "set" | "del">;
   maxActive?: number;
   cacheTtlMs?: number;
   log?: Pick<Console, "error">;
@@ -69,31 +92,20 @@ export interface OperationServiceDeps {
 const DEFAULT_CACHE_TTL_MS = 10 * 60_000;
 
 /** What a finished operation shows apart from the parts that must stay fresh: URL and revealed message. */
-const CachedOperation = z.object({
-  userId: z.string(),
-  id: z.string(),
-  type: OperationType,
-  status: z.enum(["queued", "running", "succeeded", "failed"]),
-  method: z.union([StegoMethod, z.literal("auto")]),
-  sourceImageId: z.string().nullable(),
-  resultImageId: z.string().nullable(),
-  result: OperationResult.nullable(),
-  error: z.string().nullable(),
-  createdAt: z.string(),
-});
+const CachedOperation = OperationSummary.extend({ userId: z.string() });
 type CachedOperation = z.infer<typeof CachedOperation>;
 
 const cacheKey = (id: string) => `op:${id}:view`;
 
-function toCached(row: OperationView): CachedOperation {
+function toSummary(row: OperationView): OperationSummary {
   return {
-    userId: row.user_id,
     id: row.id,
     type: OperationType.parse(row.type),
     status: row.status,
     method: row.method ?? "auto",
     sourceImageId: row.source_image_id,
     resultImageId: row.result_image_id,
+    params: row.params,
     result: OperationResult.safeParse(row.result).data ?? null,
     // Only a failed job's code is a result; a retrying job still carries its last attempt's code.
     error: row.status === "failed" ? row.error : null,
@@ -227,7 +239,7 @@ export function createOperationService({
       if (!cached) {
         const row = await operations.findOwned(userId, id);
         if (!row) return null;
-        cached = toCached(row);
+        cached = { ...toSummary(row), userId: row.user_id };
         if (isFinished(cached)) await writeCache(cached);
       }
       const resultImage = cached.resultImageId
@@ -235,18 +247,36 @@ export function createOperationService({
         : null;
       const revealed =
         cached.type === "decode" && cached.status === "succeeded" ? await readRevealed(id) : null;
+      const { userId: _, resultImageId: __, ...summary } = cached;
+      return { ...summary, resultImage, revealed };
+    },
+
+    async list(userId, { limit, after, type, status, method }) {
+      const page = await operations.listPage(userId, {
+        limit,
+        after,
+        filter: { type, status, method: method === "auto" ? null : method },
+      });
       return {
-        id: cached.id,
-        type: cached.type,
-        status: cached.status,
-        method: cached.method,
-        sourceImageId: cached.sourceImageId,
-        resultImage,
-        result: cached.result,
-        error: cached.error,
-        revealed,
-        createdAt: cached.createdAt,
+        operations: page.operations.map(toSummary),
+        nextCursor: page.next && encodeCursor(page.next),
       };
+    },
+
+    async remove(userId, id) {
+      const row = await operations.findOwned(userId, id);
+      if (!row) return false;
+      if (!(await operations.deleteFinishedOwned(userId, id))) throw new OperationActiveError();
+      // The cached view and a revealed message would keep answering for the owner after the row is gone.
+      await Promise.all([
+        kv.del(cacheKey(id)).catch((error) => {
+          log.error("Could not drop a deleted operation from the cache", error);
+        }),
+        handoff.deleteRevealed(id).catch((error) => {
+          log.error("Could not drop the revealed message of a deleted operation", error);
+        }),
+      ]);
+      return true;
     },
   };
 }

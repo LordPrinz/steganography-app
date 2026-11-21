@@ -27,6 +27,8 @@ export interface MessageHandoff {
    * operation belongs to the current user; the id is unguessable but no authorisation check.
    */
   getRevealed(operationId: string): Promise<string | null>;
+  /** API: drops a revealed message at once, e.g. when its operation is deleted. */
+  deleteRevealed(operationId: string): Promise<void>;
 }
 
 function assertSize(message: string): void {
@@ -52,5 +54,6 @@ export function createMessageHandoff(kv: KeyValueStore): MessageHandoff {
       await kv.set(revealedKey(operationId), message, ttlMs);
     },
     getRevealed: (operationId) => kv.get(revealedKey(operationId)),
+    deleteRevealed: (operationId) => kv.del(revealedKey(operationId)),
   };
 }

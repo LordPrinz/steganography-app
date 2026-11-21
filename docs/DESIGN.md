@@ -238,6 +238,18 @@ each kernel with a naive TS oracle, and an ASan/UBSan harness checks memory safe
     `Cache-Control: no-store`. Succeeded and failed operations never change, so their stored fields are
     cached in Redis for 10 minutes (cache-aside, with the owner's id inside the entry); the URL and the
     revealed message are never cached. If Redis is down the read falls back to Postgres.
+- History (`GET /api/v1/operations`, `DELETE /api/v1/operations/:id`):
+  - The list is the owner's operations newest first, paged with the same opaque keyset cursor on
+    `(created_at, id)` as the gallery (default 24, at most 100), backed by `operations_user_history_idx`.
+    Filters `type`, `method` (`auto` means a decode that tries every method) and `status` are applied to
+    the rows the `(user_id, created_at, id)` index walks. `EXPLAIN ANALYZE` on 200k rows (50 users) shows an
+    index scan that stops early when matches are common (the PR has the plans); a filter that matches very
+    few rows would walk more of the user's history.
+  - A row carries the stored fields and `params`, but no presigned URL and no revealed message; those stay
+    on the detail endpoint, which also returns `params`. The list answers with `Cache-Control: no-store`.
+  - `DELETE` removes only a succeeded or failed operation (204; its job goes with it, the images stay in the
+    gallery). A queued or running one is a 409 `operation_active`, because the worker still writes to it.
+    Another user's operation is a 404. The cached view and any revealed message are dropped with the row.
 - The hidden message is **never** stored in the database.
 
 ### Web sessions

@@ -9,8 +9,8 @@ import {
 import type { ImageCursor, ImageRepository, ImageRow } from "@stego/db";
 import { decodeRgba, encodePng } from "@stego/image-io";
 import { newImageKey, type ObjectStore } from "@stego/storage";
-import { z } from "zod";
 import type { ConcurrencyLimit } from "../../lib/concurrency-limit.ts";
+import { encodeCursor } from "../../lib/cursor.ts";
 
 /** The bytes are not a PNG, JPEG or WebP, whatever the client claimed. */
 export class UnsupportedImageError extends Error {
@@ -171,20 +171,4 @@ export function createImageService({
       return true;
     },
   };
-}
-
-const CursorPayload = z.object({ createdAt: z.iso.datetime(), id: z.uuid() });
-
-function encodeCursor({ createdAt, id }: ImageCursor): string {
-  return Buffer.from(JSON.stringify({ createdAt, id })).toString("base64url");
-}
-
-/** The cursor behind an opaque string from `nextCursor`, or null when it is not one. */
-export function decodeCursor(cursor: string): ImageCursor | null {
-  try {
-    const parsed = CursorPayload.safeParse(JSON.parse(Buffer.from(cursor, "base64url").toString()));
-    return parsed.success ? parsed.data : null;
-  } catch {
-    return null;
-  }
 }

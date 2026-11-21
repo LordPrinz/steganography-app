@@ -3,7 +3,11 @@ import { AUTO_SELECTIONS, MethodSelection } from "@stego/contracts";
 import type { ImageRow, OperationRepository, OperationRow, OperationView } from "@stego/db";
 import { createMethod } from "@stego/engine";
 import { createMemoryStore, createMessageHandoff, type KeyValueStore } from "@stego/kv";
-import { createOperationService, TooManyActiveOperationsError } from "./service.ts";
+import {
+  createOperationService,
+  OperationActiveError,
+  TooManyActiveOperationsError,
+} from "./service.ts";
 
 const USER = crypto.randomUUID();
 const OTHER = crypto.randomUUID();
@@ -46,6 +50,13 @@ function setup({
     async findOwned(userId, id) {
       lookups++;
       return rows.find((row) => row.id === id && row.user_id === userId) ?? null;
+    },
+    async listPage() {
+      return { operations: [], next: null };
+    },
+    async deleteFinishedOwned(userId, id) {
+      const row = rows.find((r) => r.id === id && r.user_id === userId);
+      return row?.status === "succeeded" || row?.status === "failed";
     },
     async attachResultImage() {},
   };
@@ -122,6 +133,52 @@ describe("message hand-off", () => {
     const [key] = keys;
     expect(key).toMatch(/^op:[0-9a-f-]{36}:message$/);
     expect(await handoff.getMessage((key as string).split(":")[1] as string)).toBeNull();
+  });
+});
+
+describe("remove", () => {
+  test("forgets the cached view of a deleted operation", async () => {
+    const row = view({ status: "succeeded" });
+    const { service, kv } = setup({ rows: [row] });
+    await service.get(USER, row.id);
+    expect(await kv.get(`op:${row.id}:view`)).not.toBeNull();
+    expect(await service.remove(USER, row.id)).toBe(true);
+    expect(await kv.get(`op:${row.id}:view`)).toBeNull();
+  });
+
+  test("drops the revealed message of a deleted operation", async () => {
+    const row = view({ status: "succeeded" });
+    const { service, handoff } = setup({ rows: [row] });
+    await handoff.putRevealed(row.id, "hidden text");
+    await service.remove(USER, row.id);
+    expect(await handoff.getRevealed(row.id)).toBeNull();
+  });
+
+  test("still deletes when the key-value store is down", async () => {
+    const down: KeyValueStore = {
+      ...createMemoryStore(),
+      del: async () => {
+        throw new Error("redis down");
+      },
+    };
+    const row = view({ status: "succeeded" });
+    const { service } = setup({ rows: [row], kv: down });
+    expect(await service.remove(USER, row.id)).toBe(true);
+  });
+
+  test("is false for a missing or foreign operation and leaves the cache alone", async () => {
+    const row = view({ status: "succeeded" });
+    const { service, kv } = setup({ rows: [row] });
+    await service.get(USER, row.id);
+    expect(await service.remove(OTHER, row.id)).toBe(false);
+    expect(await service.remove(USER, crypto.randomUUID())).toBe(false);
+    expect(await kv.get(`op:${row.id}:view`)).not.toBeNull();
+  });
+
+  test("refuses an operation that is queued or running", async () => {
+    const row = view({ status: "running" });
+    const { service } = setup({ rows: [row] });
+    await expect(service.remove(USER, row.id)).rejects.toThrow(OperationActiveError);
   });
 });
 
