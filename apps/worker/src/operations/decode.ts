@@ -39,8 +39,17 @@ export function createDecodeHandler(deps: DecodeDeps): JobHandler {
         if (error instanceof RangeError) throw new JobError("invalid_params", { cause: error });
         throw error;
       }
+      // The codec reads the header first and the rest only for a plausible frame; count what it asked for.
+      let bitsRead = 0;
+      const counting: typeof method = {
+        ...method,
+        extract: (image, bitCount) => {
+          bitsRead = Math.max(bitsRead, bitCount);
+          return method.extract(image, bitCount);
+        },
+      };
       const started = performance.now();
-      const revealed = reveal(source, method);
+      const revealed = reveal(source, counting);
       const decodeMs = Math.round(performance.now() - started);
       const messageBytes = revealed.ok
         ? new TextEncoder().encode(revealed.message).byteLength
@@ -49,6 +58,7 @@ export function createDecodeHandler(deps: DecodeDeps): JobHandler {
         method: selection.id,
         outcome: revealed.ok ? "found" : revealed.error,
         messageBytes,
+        bitsRead,
         capacityBytes: Math.min(capacity(source.width, source.height, method), MAX_MESSAGE_BYTES),
         decodeMs,
       });

@@ -23,6 +23,12 @@ export const OPERATION_RATE_LIMITS = {
   create: { name: "operation-user", limit: 120, windowMs: 60 * 60_000 },
 } satisfies Record<string, RateLimitOptions>;
 
+/**
+ * Room for a message of MAX_MESSAGE_BYTES in the worst JSON form (every control byte escaped as six
+ * characters is 384 KiB), plus the rest of the request.
+ */
+export const MAX_ENCODE_BODY_BYTES = 512 * 1024;
+
 export interface OperationRoutesDeps {
   operations: OperationService;
   kv: KeyValueStore;
@@ -79,8 +85,9 @@ export function operationRoutes({ operations, kv, requireUser }: OperationRoutes
     "/operations/encode": {
       POST: async (req: BunRequest) => {
         const user = await requireUser(req);
+        // Charged before validation and the ownership check on purpose: bad and refused requests cost work too.
         await enforce(() => createLimiter.hit(user.id));
-        const body = await parseBody(req, EncodeRequest);
+        const body = await parseBody(req, EncodeRequest, MAX_ENCODE_BODY_BYTES);
         return accepted(await refuse(operations.encode(user.id, body)));
       },
     },
@@ -88,6 +95,7 @@ export function operationRoutes({ operations, kv, requireUser }: OperationRoutes
     "/operations/decode": {
       POST: async (req: BunRequest) => {
         const user = await requireUser(req);
+        // Charged before validation and the ownership check on purpose, as for encode.
         await enforce(() => createLimiter.hit(user.id));
         const body = await parseBody(req, DecodeRequest);
         return accepted(await refuse(operations.decode(user.id, body)));

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { AUTO_SELECTIONS, type DecodeResult, type EncodeResult } from "@stego/contracts";
-import { type ClaimedJob, JobError, type OperationType } from "@stego/db";
+import { type ClaimedJob, JobError, type OperationType, type OperationView } from "@stego/db";
 import { createMemoryImageRepository } from "@stego/db/testing";
 import { decodePng, encodePng } from "@stego/image-io";
 import { createMemoryObjectStore, newImageKey, type ObjectStore } from "@stego/storage";
@@ -41,8 +41,14 @@ function fixture() {
     },
   };
   const attached: [string, string][] = [];
+  const linked = new Map<string, string>();
   const operations = {
-    attachResultImage: async (op: string, image: string) => void attached.push([op, image]),
+    attachResultImage: async (op: string, image: string) => {
+      attached.push([op, image]);
+      linked.set(op, image);
+    },
+    findOwned: async (_user: string, op: string) =>
+      ({ result_image_id: linked.get(op) ?? null }) as OperationView,
   };
 
   async function addImage(pixels = noise(128, 128), userId = USER) {
@@ -199,7 +205,7 @@ describe("encode handler", () => {
     const source = await f.addImage();
     const handler = createEncodeHandler({
       ...f,
-      images: { findOwned: f.images.findOwned, create: async () => null },
+      images: { ...f.images, create: async () => null },
     });
     f.puts.length = 0;
     expect(await code(handler(f.job("encode", source.id, { layers: [lsb] }), f.context()))).toBe(
@@ -208,6 +214,41 @@ describe("encode handler", () => {
     expect(f.puts).toHaveLength(1);
     expect(f.deletes).toEqual(f.puts);
     expect(f.attached).toEqual([]);
+  });
+
+  test("removes the row and the object when linking the operation fails", async () => {
+    const f = fixture();
+    const source = await f.addImage();
+    const handler = createEncodeHandler({
+      ...f,
+      operations: {
+        ...f.operations,
+        attachResultImage: async () => {
+          throw new Error("database down");
+        },
+      },
+    });
+    f.puts.length = 0;
+    await expect(
+      handler(f.job("encode", source.id, { layers: [lsb] }), f.context()),
+    ).rejects.toThrow("database down");
+    expect(f.puts).toHaveLength(1);
+    expect(f.deletes).toEqual(f.puts);
+    expect((await f.images.usage(USER)).count).toBe(1);
+  });
+
+  test("a re-run of a finished encode stores no second image", async () => {
+    const f = fixture();
+    const source = await f.addImage();
+    const handler = createEncodeHandler(f);
+    const job = f.job("encode", source.id, { layers: [lsb] });
+    const first = (await handler(job, f.context())) as EncodeResult;
+    f.puts.length = 0;
+    const again = (await handler(job, f.context())) as EncodeResult;
+    expect(f.puts).toEqual([]);
+    expect(f.attached).toHaveLength(1);
+    expect((await f.images.usage(USER)).count).toBe(2);
+    expect(again).toMatchObject({ kind: "encode", messageBytes: first.messageBytes });
   });
 
   test("writes nothing once aborted", async () => {
@@ -256,7 +297,12 @@ describe("decode handler", () => {
       kind: "decode",
       detected: "lsb",
       attempts: [
-        { method: "lsb", outcome: "found", messageBytes: new TextEncoder().encode(SECRET).length },
+        {
+          method: "lsb",
+          outcome: "found",
+          messageBytes: new TextEncoder().encode(SECRET).length,
+          bitsRead: (new TextEncoder().encode(SECRET).length + 12) * 8,
+        },
       ],
     });
     expect(JSON.stringify(result)).not.toContain("attack");
@@ -297,7 +343,8 @@ describe("decode handler", () => {
     expect(result.detected).toBeNull();
     expect(result.attempts).toHaveLength(AUTO_SELECTIONS.length);
     for (const attempt of result.attempts) {
-      expect(attempt).toMatchObject({ outcome: "no-message", messageBytes: null });
+      // Only the 8-byte frame header was read.
+      expect(attempt).toMatchObject({ outcome: "no-message", messageBytes: null, bitsRead: 64 });
       expect(attempt.capacityBytes).toBeGreaterThan(0);
     }
     expect(f.revealed).toEqual([]);

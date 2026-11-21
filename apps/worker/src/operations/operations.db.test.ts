@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { Operation, OperationAccepted } from "@stego/contracts";
 import {
   createImageRepository,
@@ -39,7 +39,8 @@ afterAll(async () => {
   await testDb?.teardown();
 });
 
-const SECRET = "attack at dawn: ünïcödé ✓";
+// Unique per run, so a match in a row or a log line can only come from this message.
+const SECRET = `s-${crypto.randomUUID()}-é✓`;
 
 function noise(width: number, height: number) {
   const data = new Uint8ClampedArray(width * height * 4);
@@ -93,9 +94,27 @@ const kvBackends: [string, () => KeyValueStore, boolean][] = [
 ];
 
 const stopWhenDone: (() => Promise<void>)[] = [];
+
+// Everything the worker logs and everything written to the console while a test runs.
+const logged: unknown[][] = [];
+const consoleMethods = ["log", "info", "warn", "error", "debug"] as const;
+const originalConsole = Object.fromEntries(consoleMethods.map((m) => [m, console[m]]));
+beforeEach(() => {
+  logged.length = 0;
+  for (const m of consoleMethods) console[m] = (...args: unknown[]) => void logged.push(args);
+});
+
 afterEach(async () => {
   for (const stop of stopWhenDone.splice(0)) await stop();
+  for (const m of consoleMethods) console[m] = originalConsole[m] as never;
 });
+
+/** The message, and the form it takes inside a JSON string, appear in none of the captured output. */
+function expectNoSecretLogged(): void {
+  const output = logged.map((args) => args.map((arg) => Bun.inspect(arg)).join(" ")).join("\n");
+  expect(output).not.toContain(SECRET);
+  expect(output).not.toContain(JSON.stringify(SECRET).slice(1, -1));
+}
 
 describe.skipIf(!sql).each(kvBackends)(
   "encode and decode through the API and the worker (%s)",
@@ -127,7 +146,7 @@ describe.skipIf(!sql).each(kvBackends)(
         handoff: createMessageHandoff(kv),
         // The wake-up is what starts jobs here, not the poll.
         pollIntervalMs: 30_000,
-        log: { error: () => {} },
+        log: { error: (...args: unknown[]) => void logged.push(args) },
       });
       const stopListening = wake.listen(() => worker.wake());
       const running = worker.run();
@@ -210,8 +229,11 @@ describe.skipIf(!sql).each(kvBackends)(
       UNION ALL SELECT to_jsonb(i)::text FROM images i
     `;
       expect(rows.length).toBeGreaterThan(4);
-      expect(rows.some(({ row }) => row.includes("attack") || row.includes("dawn"))).toBe(false);
-      expect(ann.userId).not.toBe("");
+      for (const { row } of rows) {
+        expect(row).not.toContain(SECRET);
+        expect(row).not.toContain(JSON.stringify(SECRET).slice(1, -1));
+      }
+      expectNoSecretLogged();
     });
 
     test.skipIf(!enabled)("auto finds no message in an image that holds none", async () => {
@@ -243,7 +265,31 @@ describe.skipIf(!sql).each(kvBackends)(
         { attempts: number }[]
       >`SELECT attempts FROM jobs WHERE operation_id = ${failed.id}`;
       expect(job?.attempts).toBe(1);
+      // The failure was logged, and the log does not hold the message.
+      expect(logged.length).toBeGreaterThan(0);
+      expectNoSecretLogged();
+      const rows = await db<{ row: string }[]>`
+        SELECT to_jsonb(o)::text AS row FROM operations o UNION ALL SELECT to_jsonb(j)::text FROM jobs j
+      `;
+      expect(rows.some(({ row }) => row.includes(SECRET))).toBe(false);
     });
+
+    test.skipIf(!enabled)(
+      "a result image deleted later leaves the operation succeeded",
+      async () => {
+        const { ann, encode } = await start();
+        const encoded = await encode({ id: "lsb" });
+        expect(encoded.resultImage).not.toBeNull();
+        const removed = await ann.request("DELETE", `/images/${encoded.resultImage?.id}`);
+        expect(removed.status).toBe(204);
+        const res = await ann.request("GET", `/operations/${encoded.id}`);
+        expect(Operation.parse(await res.json())).toMatchObject({
+          status: "succeeded",
+          resultImage: null,
+          result: { kind: "encode" },
+        });
+      },
+    );
 
     test.skipIf(!enabled)("other users cannot read an operation or its message", async () => {
       const { server, ann, upload, decode, handoff } = await start();

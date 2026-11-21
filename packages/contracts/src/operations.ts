@@ -77,10 +77,13 @@ export const AUTO_SELECTIONS: readonly MethodSelection[] = StegoMethod.options.m
 /** Operations a user may have queued or running at once. */
 export const MAX_ACTIVE_OPERATIONS_PER_USER = 5;
 
-/** The message length fits the API's 64 KiB JSON limit; the engine's byte limit applies on top. */
+/**
+ * No length cap here: the engine's byte limit is checked against the image's capacity, which answers a
+ * too-long message with its sizes. The route's body cap bounds what is read.
+ */
 export const EncodeRequest = z.strictObject({
   imageId: z.uuid(),
-  message: z.string().min(1).max(65_536),
+  message: z.string().min(1),
   /** One layer until layered embedding exists. */
   layers: z.tuple([MethodSelection]),
 });
@@ -117,6 +120,8 @@ export const DecodeAttempt = z.object({
   outcome: DecodeOutcome,
   /** UTF-8 length of the message read; null unless it was found. */
   messageBytes: z.number().int().nonnegative().nullable(),
+  /** Bits the method extracted: the frame header alone when no frame was found, else the whole frame. */
+  bitsRead: z.number().int().nonnegative(),
   capacityBytes: z.number().int().nonnegative(),
   decodeMs: z.number().nonnegative(),
 });

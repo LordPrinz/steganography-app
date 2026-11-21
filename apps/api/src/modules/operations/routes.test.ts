@@ -7,13 +7,14 @@ import {
   createUserRepository,
 } from "@stego/db";
 import { createTestDatabase } from "@stego/db/testing";
+import { MAX_MESSAGE_BYTES } from "@stego/engine";
 import { encodePng } from "@stego/image-io";
 import { createMemoryStore, createMessageHandoff } from "@stego/kv";
 import { createServer, type ServerDeps } from "../../app.ts";
 import { createRateLimiter } from "../../lib/rate-limit.ts";
 import { Client } from "../../testing/client.ts";
 import { testServerDeps } from "../../testing/server-deps.ts";
-import { OPERATION_RATE_LIMITS } from "./routes.ts";
+import { MAX_ENCODE_BODY_BYTES, OPERATION_RATE_LIMITS } from "./routes.ts";
 
 // Runs against the in-memory repositories, and again against Postgres when TEST_DATABASE_URL is set.
 const testDb = createTestDatabase();
@@ -233,6 +234,54 @@ describe.each(backends)("operations API (%s)", (_name, backend) => {
       const res = await encode(bob);
       expect(res.status).toBe(404);
       expect(await errorCode(res)).toBe("image_not_found");
+    });
+  });
+
+  describe("message size", () => {
+    // 512 x 512 holds 98 KiB with one bit per channel, more than MAX_MESSAGE_BYTES plus the frame.
+    const LIMIT = MAX_MESSAGE_BYTES;
+
+    async function big() {
+      const ctx = await start();
+      const data = new Uint8ClampedArray(512 * 512 * 4).fill(128);
+      const image = await ctx.ann.uploadMeta(await encodePng({ width: 512, height: 512, data }));
+      const send = (message: string) =>
+        ctx.encode(ctx.ann, { imageId: image.id, message, layers: [{ id: "lsb" }] });
+      return { ...ctx, send };
+    }
+
+    test.each([
+      ["ASCII", "a", 1],
+      ["two-byte", "é", 2],
+      ["three-byte", "✓", 3],
+      ["four-byte", "😀", 4],
+    ])(
+      "%s: a message of exactly the limit is accepted, one byte more gets sizes",
+      async (_n, unit, width) => {
+        const { send } = await big();
+        const atLimit = unit.repeat(Math.floor(LIMIT / width)) + "a".repeat(LIMIT % width);
+        expect((await send(atLimit)).status).toBe(202);
+        const over = await send(`${atLimit}a`);
+        expect(over.status).toBe(422);
+        const { error } = ApiError.parse(await over.json());
+        expect(error).toMatchObject({
+          code: "message_too_large",
+          details: { needed: LIMIT + 1, available: LIMIT },
+        });
+      },
+    );
+
+    test("the worst JSON escaping of a maximal message still fits the body cap", async () => {
+      const { send } = await big();
+      // Every control byte becomes a six-character escape: 384 KiB of body for 64 KiB of message.
+      const res = await send("\u0001".repeat(LIMIT));
+      expect(res.status).toBe(202);
+    });
+
+    test("a body over the route's cap is a 413", async () => {
+      const { send } = await big();
+      const res = await send("a".repeat(MAX_ENCODE_BODY_BYTES));
+      expect(res.status).toBe(413);
     });
   });
 

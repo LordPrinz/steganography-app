@@ -65,12 +65,13 @@ export async function readBody(req: Request, maxBytes: number): Promise<Uint8Arr
   return chunks.length === 1 ? (chunks[0] as Uint8Array) : Buffer.concat(chunks);
 }
 
-/** Parses a JSON body against a contract schema; any failure is a 400 that never echoes the input. */
+/** Parses a JSON body (at most `maxBytes`) against a contract schema; any failure is a 400 that never echoes the input. */
 export async function parseBody<S extends z.ZodType>(
   req: Request,
   schema: S,
+  maxBytes = MAX_JSON_BYTES,
 ): Promise<z.output<S>> {
-  const bytes = await readBody(req, MAX_JSON_BYTES);
+  const bytes = await readBody(req, maxBytes);
   let body: unknown;
   try {
     body = JSON.parse(new TextDecoder().decode(bytes));
