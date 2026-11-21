@@ -144,7 +144,7 @@ describe("dwtQimEmbed / dwtQimExtract", () => {
       params("LL", 1.5),
       params("LL", 1, 0),
       params("LL", 1, Number.NaN),
-      params("LL", 1, 65537),
+      params("LL", 1, 256),
       { band: "HH" as DwtBand, level: 1, step: 8 },
     ]) {
       expect(() => dwtQimExtract(cover, bad, 0)).toThrow(RangeError);

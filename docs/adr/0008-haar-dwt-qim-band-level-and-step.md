@@ -25,6 +25,8 @@ parameters to recommend.
 - Exact round trip: the change of each pixel's luminance is rounded to an integer and added to R, G
   and B, then clamped to 0..255. Rounding moves a level-L coefficient by at most 2^L / 2, which
   stays below the d / 4 tolerance only when d > 2^(level + 1), so `dwtQim` rejects smaller steps.
+  Steps above 255 are rejected too, so the LL range clamp below always has room (the range is at
+  least 510 wide).
   That bound covers rounding, not clamping. Near black and white a change cannot be applied in
   full, so the embedder reads the result back exactly as the extractor does and moves each
   coefficient that decodes wrongly again, up to 16 rounds. An LL coefficient can only lie in

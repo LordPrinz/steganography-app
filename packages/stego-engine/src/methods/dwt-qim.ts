@@ -12,8 +12,8 @@ export type { DwtQimParams };
 /**
  * Haar DWT of the luminance with quantisation index modulation: one bit per coefficient of one
  * band (`LL`, `HL` or `LH`) at one level, quantised with `step`. Rounding to 8-bit pixels moves a
- * coefficient by up to 2^level / 2, so `step` must exceed 2^(level + 1); smaller steps are
- * rejected. Clamping at black and white is handled by embedding, reading back and correcting. No
+ * coefficient by up to 2^level / 2, so `step` must exceed 2^(level + 1) and, so that an LL target
+ * always has room inside [0, 255 * 2^level], be at most 255; other steps are rejected. Clamping at black and white is handled by embedding, reading back and correcting. No
  * step above the bound failed on flat, near-saturated or noise covers in the tests, but this is
  * not proven for every image, so `embed` throws if a bit still cannot round-trip. The pixel loops
  * run in `@stego/native`.

@@ -554,7 +554,7 @@ static void dwt_invalid(void) {
   /* Band, level and step out of range, including NaN and infinity. */
   static const uint32_t bad_band[] = {STEGO_DWT_LH + 1, UINT32_MAX};
   static const uint32_t bad_level[] = {0, STEGO_DWT_MAX_LEVEL + 1, UINT32_MAX};
-  static const double bad_step[] = {0.0, -1.0, NAN, INFINITY, -INFINITY, 65536.5, 1e300};
+  static const double bad_step[] = {0.0, -1.0, NAN, INFINITY, -INFINITY, 255.5, 65536.5, 1e300};
   for (size_t i = 0; i < sizeof bad_band / sizeof bad_band[0]; i++)
     EXPECT(EMBED(rgba, 1, 1, bad_band[i], 1, 8.0, bits, plane, scratch, out, &failed) ==
            STEGO_E_ARGUMENT);

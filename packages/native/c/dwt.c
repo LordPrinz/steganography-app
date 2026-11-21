@@ -18,8 +18,8 @@
 
 #define HAAR_NORM 0.70710678118654752440
 
-/* Largest step: keeps coefficient / step small enough for the int64 conversion in dwt_floor. */
-#define MAX_STEP 65536.0
+/* Largest step: below 255 * 2^level for every level, so the LL range clamp in quantise has room. */
+#define MAX_STEP 255.0
 
 /* Floor without libm, valid for |x| below 2^62. */
 static inline double dwt_floor(double x) {

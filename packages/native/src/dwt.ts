@@ -10,13 +10,13 @@ export type DwtBand = keyof typeof DWT_BANDS;
 export const DWT_MAX_LEVEL = 8;
 
 /** Largest accepted step, mirrors MAX_STEP in c/dwt.c. */
-export const DWT_MAX_STEP = 65536;
+export const DWT_MAX_STEP = 255;
 
 export interface DwtQimParams {
   readonly band: DwtBand;
   /** Decomposition level, 1–8. */
   readonly level: number;
-  /** Quantisation step, above 0 and at most 65536. */
+  /** Quantisation step, above 0 and at most 255. */
   readonly step: number;
 }
 

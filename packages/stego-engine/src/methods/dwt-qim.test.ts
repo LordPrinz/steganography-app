@@ -48,10 +48,16 @@ describe("dwtQim", () => {
     expect(reveal(stego, dwtQim({ band: "HL", level: 1, step: 24 })).ok).toBe(false);
   });
 
-  test("rejects a step at or below 2^(level + 1)", () => {
-    expect(() => dwtQim({ band: "LL", level: 2, step: 8 })).toThrow(RangeError);
-    expect(() => dwtQim({ band: "LL", level: 1, step: 4 })).toThrow(RangeError);
-    expect(() => dwtQim({ band: "LL", level: 2, step: 9 })).not.toThrow();
+  test.each([1, 2, 3, 4])("accepts only steps above 2^(level + 1) at level %i", (level) => {
+    const bound = 2 ** (level + 1);
+    expect(() => dwtQim({ band: "LL", level, step: bound })).toThrow(RangeError);
+    expect(() => dwtQim({ band: "LL", level, step: bound + 1 })).not.toThrow();
+  });
+
+  test("accepts steps up to 255 and rejects larger ones", () => {
+    expect(() => dwtQim({ band: "LL", level: 1, step: 255 })).not.toThrow();
+    expect(() => dwtQim({ band: "LL", level: 1, step: 256 })).toThrow(RangeError);
+    expect(() => dwtQim({ band: "HL", level: 8, step: 1000 })).toThrow(RangeError);
   });
 
   test.each([0, 255, 253])("embeds into a flat cover of %i", (value) => {
