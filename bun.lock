@@ -19,6 +19,7 @@
         "@stego/db": "workspace:*",
         "@stego/engine": "workspace:*",
         "@stego/image-io": "workspace:*",
+        "@stego/kv": "workspace:*",
         "@stego/storage": "workspace:*",
         "zod": "4.6.7",
       },
@@ -58,6 +59,7 @@
         "@stego/db": "workspace:*",
         "@stego/engine": "workspace:*",
         "@stego/image-io": "workspace:*",
+        "@stego/kv": "workspace:*",
         "zod": "4.6.7",
       },
     },
@@ -78,6 +80,13 @@
       "dependencies": {
         "@stego/contracts": "workspace:*",
         "@stego/native": "workspace:*",
+      },
+    },
+    "packages/kv": {
+      "name": "@stego/kv",
+      "version": "0.0.0",
+      "dependencies": {
+        "@stego/engine": "workspace:*",
       },
     },
     "packages/native": {
@@ -421,6 +430,8 @@
     "@stego/engine": ["@stego/engine@workspace:packages/stego-engine"],
 
     "@stego/image-io": ["@stego/image-io@workspace:packages/image-io"],
+
+    "@stego/kv": ["@stego/kv@workspace:packages/kv"],
 
     "@stego/native": ["@stego/native@workspace:packages/native"],
 

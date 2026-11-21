@@ -14,7 +14,7 @@ The robustness lab is the core of the project; accounts and gallery are standard
 
 ```
 web (Next.js) ──/api/v1/* rewrite──▶ api (Bun.serve) ──▶ Postgres (jobs, metadata)
-                                        ├──▶ Redis (rate limits, cache)
+                                        ├──▶ Redis (rate limits, cache, message handoff)
                                         │                    ▲
                                         ▼                    │
                                   R2 / RustFS ◀─────── worker (Bun)
@@ -93,9 +93,20 @@ stored as `internal_error`, and its details go only to the worker log. Handler r
 
 ### Redis for ephemeral state
 
-Rate-limit counters and small caches live in Redis behind a `KeyValueStore` port (Bun `RedisClient`).
-Only losable, short-lived data goes there; anything durable stays in Postgres. `GET /api/v1/health/ready`
-reports 503 when Redis is down. See ADR 3.
+Rate-limit counters, small caches and the hidden message in transit live in Redis behind a `KeyValueStore`
+port (Bun `RedisClient`). The port, its adapters and the message handoff are in `@stego/kv`, which both
+apps import. Only losable, short-lived data goes there; anything durable stays in Postgres.
+`GET /api/v1/health/ready` reports 503 when Redis is down, and the worker claims no job while Redis does
+not answer. See ADR 3.
+
+The hidden message never reaches Postgres or the logs. For encode, the API stores it under
+`op:{operationId}:message` (TTL 15 min, at most `MAX_MESSAGE_BYTES`) in the request that enqueues the
+job. The handler reads it with `context.message()` on every attempt, so retries work. The worker deletes
+it once the job is succeeded or failed for good. A missing or expired message fails the job with
+`message_expired` and no retry. For decode, the handler calls `context.reveal()`, which stores the text
+under `op:{operationId}:revealed` (TTL 5 min). `GET` on the operation returns it while the key exists;
+afterwards the history shows only the outcome. Key names use the operation id only. Redis keeps an AOF on
+disk, so a message can outlive its delete in the file until the next rewrite; the TTLs bound the window.
 
 ### Image processing on Bun.Image
 
@@ -156,11 +167,23 @@ each kernel with a naive TS oracle, and an ASan/UBSan harness checks memory safe
     keep that.
 - Storage: private bucket, keys `users/{userId}/{uuid}.png`, short-lived presigned URLs issued only
   after an ownership check. Every query by id is scoped to the current user.
-- Uploads (`POST /api/v1/images`, multipart field `file`): at most 10 MiB, PNG, JPEG or WebP by magic
-  bytes (the declared type is ignored), at most 4096 × 4096 pixels. The image is decoded and re-encoded as
-  PNG, which drops EXIF and every other metadata chunk; the uploaded bytes are never stored. 60 uploads
-  per hour per user. Bun has one body limit for the whole server, so it is set for uploads (10 MiB plus
-  multipart overhead) and JSON bodies are capped at 64 KiB in `parseBody`.
+- Uploads (`POST /api/v1/images`, multipart field `file`; with several `file` parts the first counts):
+  - At most 10 MiB, PNG, JPEG or WebP by magic bytes (the declared type is ignored), at most 4096 × 4096
+    pixels.
+  - The image is decoded and re-encoded as PNG, which drops EXIF and every other metadata chunk. The
+    uploaded bytes are never stored.
+  - The re-encoded PNG may be at most 32 MiB (413 `image_too_large`). A noisy image can grow a lot when
+    it is stored losslessly.
+  - 60 uploads per hour per user.
+  - Quota per user: 200 images and 1 GiB of stored PNG (413 `quota_exceeded`). It is checked early, and
+    again inside the insert transaction under a per-user row lock, so concurrent uploads cannot
+    overshoot. A refused upload leaves no object in storage.
+  - A decode holds up to 64 MiB of pixels, so at most 2 decodes run at once per API process. A third
+    gets 503 with `Retry-After: 2` straight away; nothing queues.
+- Request body limits:
+  - Bun has one body limit for the whole server, so it is set to fit uploads (10 MiB plus multipart
+    overhead).
+  - JSON bodies are capped at 64 KiB in `parseBody`.
 - Gallery: `GET /api/v1/images` pages newest first with an opaque keyset cursor on `(created_at, id)`,
   backed by `images_user_gallery_idx`. Another user's image is a 404, never a 403. Deleting removes the
   object from storage first, then the row, so a failed delete can be retried.

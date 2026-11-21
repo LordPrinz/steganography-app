@@ -1,9 +1,13 @@
 import { type ClaimedJob, JobError, type JobQueue } from "@stego/db";
-import type { JobHandler, JobHandlers } from "./handlers.ts";
+import type { MessageHandoff } from "@stego/kv";
+import type { JobContext, JobHandler, JobHandlers } from "./handlers.ts";
 
 export interface WorkerOptions {
-  queue: Pick<JobQueue, "claim" | "extend" | "complete" | "fail">;
+  queue: Pick<JobQueue, "maxAttempts" | "claim" | "extend" | "complete" | "fail">;
   handlers: JobHandlers;
+  handoff: Pick<MessageHandoff, "getMessage" | "deleteMessage" | "putRevealed">;
+  /** The worker claims no job while this reports false (Redis down: jobs could not read their message). */
+  ready?: () => Promise<boolean>;
   /** Sleep between polls when the queue is empty. */
   pollIntervalMs?: number;
   /** A job running longer than this is aborted and failed without retry. */
@@ -24,9 +28,14 @@ type Outcome =
   | { ok: true; result: Awaited<ReturnType<JobHandler>> }
   | { ok: false; error: unknown };
 
+// Repeating these on the same input cannot help.
+const NO_RETRY = new Set(["timeout", "message_expired"]);
+
 export function createWorker({
   queue,
   handlers,
+  handoff,
+  ready,
   pollIntervalMs = 1_000,
   jobTimeoutMs = 10 * 60_000,
   heartbeatMs = 30_000,
@@ -58,6 +67,16 @@ export function createWorker({
 
   // Runs the handler with a heartbeat and a timeout; all timers are cleared before this returns.
   async function runHandler(handler: JobHandler, job: ClaimedJob): Promise<Outcome> {
+    const operationId = job.operation_id;
+    const context = (signal: AbortSignal): JobContext => ({
+      signal,
+      async message() {
+        const message = await handoff.getMessage(operationId);
+        if (message === null) throw new JobError("message_expired");
+        return message;
+      },
+      reveal: (message) => handoff.putRevealed(operationId, message),
+    });
     const abort = new AbortController();
     let renewing = false;
     const heartbeat = setInterval(async () => {
@@ -84,7 +103,7 @@ export function createWorker({
     try {
       return {
         ok: true,
-        result: await Promise.race([handler(job, { signal: abort.signal }), aborted]),
+        result: await Promise.race([handler(job, context(abort.signal)), aborted]),
       };
     } catch (error) {
       return { ok: false, error };
@@ -95,30 +114,45 @@ export function createWorker({
     }
   }
 
+  // The message is kept across retries and dropped once the job can no longer run again. Losing the
+  // delete only leaves it to its TTL.
+  async function discardMessage(job: ClaimedJob): Promise<void> {
+    try {
+      await handoff.deleteMessage(job.operation_id);
+    } catch (error) {
+      log.error(`Job ${job.id}: could not delete the message:`, error);
+    }
+  }
+
   async function handle(job: ClaimedJob): Promise<void> {
     const handler = handlers[job.operation.type];
     if (!handler) {
       log.error(`Job ${job.id}: no handler for type "${job.operation.type}"`);
-      warnIfLeaseLost(await queue.fail(job, new JobError("no_handler"), { retry: false }), job);
+      const owned = await queue.fail(job, new JobError("no_handler"), { retry: false });
+      warnIfLeaseLost(owned, job);
+      if (owned) await discardMessage(job);
       return;
     }
     const outcome = await runHandler(handler, job);
     if (!outcome.ok) {
       log.error(`Job ${job.id} attempt ${job.attempts} failed:`, outcome.error);
-      // A timeout would most likely repeat on the same input, so it is not retried.
-      const retry = !(outcome.error instanceof JobError && outcome.error.code === "timeout");
-      warnIfLeaseLost(await queue.fail(job, outcome.error, { retry }), job);
+      const retry = !(outcome.error instanceof JobError && NO_RETRY.has(outcome.error.code));
+      const owned = await queue.fail(job, outcome.error, { retry });
+      warnIfLeaseLost(owned, job);
+      if (owned && (!retry || job.attempts >= queue.maxAttempts)) await discardMessage(job);
       return;
     }
     // A database error here must not count as a failed attempt of work that succeeded. It reaches the
     // loop's error handler and the lease brings the job back.
-    warnIfLeaseLost(await queue.complete(job, outcome.result ?? null), job);
+    const owned = await queue.complete(job, outcome.result ?? null);
+    warnIfLeaseLost(owned, job);
+    if (owned) await discardMessage(job);
   }
 
   async function poll(): Promise<void> {
     while (running) {
       try {
-        const job = await queue.claim();
+        const job = (await ready?.()) === false ? null : await queue.claim();
         if (job) {
           await handle(job);
           continue;

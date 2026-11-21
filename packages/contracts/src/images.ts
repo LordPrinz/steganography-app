@@ -3,6 +3,16 @@ import { z } from "zod";
 /** Largest upload accepted, before decoding. Stored images are re-encoded PNGs. */
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 
+/** Per-user caps on stored images, enforced when an upload is saved. */
+export const MAX_IMAGES_PER_USER = 200;
+export const MAX_USER_IMAGE_BYTES = 1024 * 1024 * 1024;
+
+/**
+ * Largest PNG stored. Uploads are re-encoded losslessly, so a noisy 4096 x 4096 image can be far bigger
+ * than its source.
+ */
+export const MAX_PNG_BYTES = 32 * 1024 * 1024;
+
 export const ImageKind = z.enum(["original", "stego", "variant"]);
 export type ImageKind = z.infer<typeof ImageKind>;
 

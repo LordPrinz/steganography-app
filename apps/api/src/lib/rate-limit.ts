@@ -1,5 +1,5 @@
+import { assertTtl, type KeyValueStore } from "@stego/kv";
 import { HttpError } from "./http.ts";
-import { assertTtl, type KeyValueStore } from "./kv/store.ts";
 
 export interface RateLimitOptions {
   /** Separates limiters, e.g. "login". Lowercase letters, digits and dashes. */

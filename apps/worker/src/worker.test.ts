@@ -1,8 +1,11 @@
 import { describe, expect, mock, test } from "bun:test";
 import { type ClaimedJob, JobError, type JobQueue, type OperationType } from "@stego/db";
+import { createMemoryStore, createMessageHandoff } from "@stego/kv";
+import type { JobHandler } from "./handlers.ts";
 import { createWorker } from "./worker.ts";
 
 const silent = { error: () => {} };
+const handoff = createMessageHandoff(createMemoryStore());
 
 function fakeJob(id: string, type: OperationType = "encode"): ClaimedJob {
   return {
@@ -29,6 +32,7 @@ function fakeJob(id: string, type: OperationType = "encode"): ClaimedJob {
 function fakeQueue(jobs: ClaimedJob[]) {
   const pending = [...jobs];
   return {
+    maxAttempts: 3,
     claim: mock<JobQueue["claim"]>(async () => pending.shift() ?? null),
     extend: mock<JobQueue["extend"]>(async () => true),
     complete: mock<JobQueue["complete"]>(async () => true),
@@ -40,6 +44,7 @@ describe("worker", () => {
   test("dispatches each job to the handler for its type and completes it with the result", async () => {
     const queue = fakeQueue([fakeJob("a"), fakeJob("b", "decode")]);
     const worker = createWorker({
+      handoff,
       queue,
       log: silent,
       pollIntervalMs: 5,
@@ -64,6 +69,7 @@ describe("worker", () => {
     const queue = fakeQueue([fakeJob("a")]);
     const boom = new Error("boom");
     const worker = createWorker({
+      handoff,
       queue,
       log: silent,
       handlers: {
@@ -89,6 +95,7 @@ describe("worker", () => {
     });
     const error = mock(() => {});
     const worker = createWorker({
+      handoff,
       queue,
       log: { error },
       handlers: { encode: async () => ({ ok: true }) },
@@ -106,7 +113,12 @@ describe("worker", () => {
       return false;
     });
     const error = mock(() => {});
-    const worker = createWorker({ queue, log: { error }, handlers: { encode: async () => null } });
+    const worker = createWorker({
+      handoff,
+      queue,
+      log: { error },
+      handlers: { encode: async () => null },
+    });
 
     await worker.run();
     expect(error).toHaveBeenCalledWith("Job a attempt 1: lease lost, outcome discarded");
@@ -114,6 +126,7 @@ describe("worker", () => {
 
   test("run() cannot be started twice", async () => {
     const worker = createWorker({
+      handoff,
       queue: fakeQueue([]),
       log: silent,
       pollIntervalMs: 60_000,
@@ -127,7 +140,7 @@ describe("worker", () => {
 
   test("a job type without a handler fails without retries", async () => {
     const queue = fakeQueue([fakeJob("a", "experiment")]);
-    const worker = createWorker({ queue, log: silent, pollIntervalMs: 5, handlers: {} });
+    const worker = createWorker({ handoff, queue, log: silent, pollIntervalMs: 5, handlers: {} });
     const done = worker.run();
     while (queue.fail.mock.calls.length === 0) await Bun.sleep(1);
     worker.stop();
@@ -144,6 +157,7 @@ describe("worker", () => {
     const { promise: started, resolve: markStarted } = Promise.withResolvers<void>();
     const { promise: release, resolve: releaseJob } = Promise.withResolvers<void>();
     const worker = createWorker({
+      handoff,
       queue,
       log: silent,
       handlers: {
@@ -174,7 +188,13 @@ describe("worker", () => {
 
   test("stop() wakes an idle worker without waiting for the poll interval", async () => {
     const queue = fakeQueue([]);
-    const worker = createWorker({ queue, log: silent, pollIntervalMs: 60_000, handlers: {} });
+    const worker = createWorker({
+      handoff,
+      queue,
+      log: silent,
+      pollIntervalMs: 60_000,
+      handlers: {},
+    });
     const done = worker.run();
     await Bun.sleep(5);
     const start = performance.now();
@@ -194,6 +214,7 @@ describe("worker", () => {
       return null;
     });
     const worker = createWorker({
+      handoff,
       queue,
       log: { error },
       pollIntervalMs: 1,
@@ -209,6 +230,7 @@ describe("worker", () => {
     const queue = fakeQueue([fakeJob("a")]);
     let signal: AbortSignal | undefined;
     const worker = createWorker({
+      handoff,
       queue,
       log: silent,
       jobTimeoutMs: 20,
@@ -233,6 +255,7 @@ describe("worker", () => {
     const queue = fakeQueue([fakeJob("a")]);
     queue.extend.mockImplementation(async () => queue.extend.mock.calls.length < 3);
     const worker = createWorker({
+      handoff,
       queue,
       log: silent,
       heartbeatMs: 5,
@@ -256,6 +279,7 @@ describe("worker", () => {
     const { promise: started, resolve: markStarted } = Promise.withResolvers<void>();
     const { promise: release, resolve: releaseJob } = Promise.withResolvers<void>();
     const worker = createWorker({
+      handoff,
       queue,
       log: silent,
       handlers: {
@@ -280,6 +304,7 @@ describe("worker", () => {
     const { promise: slowExtend, resolve: finishExtend } = Promise.withResolvers<boolean>();
     queue.extend.mockImplementation(() => slowExtend);
     const worker = createWorker({
+      handoff,
       queue,
       log: silent,
       heartbeatMs: 2,
@@ -299,7 +324,137 @@ describe("worker", () => {
 
   test("rejects invalid timer options", () => {
     const queue = fakeQueue([]);
-    expect(() => createWorker({ queue, handlers: {}, heartbeatMs: 0 })).toThrow(RangeError);
-    expect(() => createWorker({ queue, handlers: {}, jobTimeoutMs: 2 ** 31 })).toThrow(RangeError);
+    expect(() => createWorker({ handoff, queue, handlers: {}, heartbeatMs: 0 })).toThrow(
+      RangeError,
+    );
+    expect(() => createWorker({ handoff, queue, handlers: {}, jobTimeoutMs: 2 ** 31 })).toThrow(
+      RangeError,
+    );
+  });
+
+  describe("message handoff", () => {
+    function run(options: {
+      queue: ReturnType<typeof fakeQueue>;
+      store?: ReturnType<typeof createMemoryStore>;
+      handler: JobHandler;
+      log?: Pick<Console, "error">;
+    }) {
+      const store = options.store ?? createMemoryStore();
+      const worker = createWorker({
+        queue: options.queue,
+        handoff: createMessageHandoff(store),
+        log: options.log ?? silent,
+        pollIntervalMs: 1,
+        handlers: {
+          encode: async (job, context) => {
+            worker.stop();
+            return options.handler(job, context);
+          },
+        },
+      });
+      return { store, done: worker.run() };
+    }
+
+    test("the handler reads the message and it is deleted once the job succeeds", async () => {
+      const store = createMemoryStore();
+      await store.set("op:op-a:message", "hello", 60_000);
+      let seen: string | undefined;
+      const queue = fakeQueue([fakeJob("a")]);
+      const { done } = run({
+        queue,
+        store,
+        handler: async (_job, context) => {
+          seen = await context.message();
+          expect(await store.get("op:op-a:message")).toBe("hello");
+          return { ok: true };
+        },
+      });
+      await done;
+      expect(seen).toBe("hello");
+      expect(await store.get("op:op-a:message")).toBeNull();
+    });
+
+    test("a missing message fails the job without retry as message_expired", async () => {
+      const queue = fakeQueue([fakeJob("a")]);
+      const { done } = run({
+        queue,
+        handler: (_job, context) => context.message().then(() => ({})),
+      });
+      await done;
+      const [, error, options] = queue.fail.mock.calls[0] ?? [];
+      expect(error).toEqual(new JobError("message_expired"));
+      expect(options).toEqual({ retry: false });
+    });
+
+    test("a retryable failure keeps the message, the last attempt deletes it", async () => {
+      const store = createMemoryStore();
+      await store.set("op:op-a:message", "hello", 60_000);
+      const failing: JobHandler = async () => {
+        throw new Error("transient");
+      };
+
+      const first = fakeQueue([fakeJob("a")]);
+      await run({ queue: first, store, handler: failing }).done;
+      expect(await store.get("op:op-a:message")).toBe("hello");
+
+      const last = fakeQueue([{ ...fakeJob("a"), attempts: 3 }]);
+      await run({ queue: last, store, handler: failing }).done;
+      expect(await store.get("op:op-a:message")).toBeNull();
+    });
+
+    test("a job that lost its lease leaves the message to the new owner", async () => {
+      const store = createMemoryStore();
+      await store.set("op:op-a:message", "hello", 60_000);
+      const queue = fakeQueue([fakeJob("a")]);
+      queue.complete.mockImplementation(async () => false);
+      await run({ queue, store, handler: async () => null }).done;
+      expect(await store.get("op:op-a:message")).toBe("hello");
+    });
+
+    test("reveal stores the decoded message under op:{id}:revealed", async () => {
+      const queue = fakeQueue([fakeJob("a", "encode")]);
+      const { store, done } = run({
+        queue,
+        handler: async (_job, context) => {
+          await context.reveal("decoded");
+          return { ok: true };
+        },
+      });
+      await done;
+      expect(await store.get("op:op-a:revealed")).toBe("decoded");
+    });
+
+    test("a failing delete is logged and does not fail the job", async () => {
+      const error = mock(() => {});
+      const queue = fakeQueue([fakeJob("a")]);
+      const broken = createMemoryStore();
+      broken.del = async () => {
+        throw new Error("redis down");
+      };
+      await run({ queue, store: broken, log: { error }, handler: async () => null }).done;
+      expect(queue.complete).toHaveBeenCalledTimes(1);
+      expect(error).toHaveBeenCalledWith("Job a: could not delete the message:", expect.any(Error));
+    });
+  });
+
+  test("claims nothing while not ready, then resumes", async () => {
+    const queue = fakeQueue([fakeJob("a")]);
+    let calls = 0;
+    const worker = createWorker({
+      handoff,
+      queue,
+      log: silent,
+      pollIntervalMs: 1,
+      ready: async () => ++calls > 3,
+      handlers: {
+        encode: async () => {
+          worker.stop();
+          return null;
+        },
+      },
+    });
+    await worker.run();
+    expect(calls).toBe(4);
+    expect(queue.complete).toHaveBeenCalledTimes(1);
   });
 });

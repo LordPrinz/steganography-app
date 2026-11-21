@@ -7,6 +7,7 @@ const Env = z.object({
   S3_BUCKET: z.string().min(1),
   S3_ACCESS_KEY_ID: z.string().min(1),
   S3_SECRET_ACCESS_KEY: z.string().min(1),
+  REDIS_URL: z.url({ protocol: /^rediss?$/ }),
   WORKER_POLL_INTERVAL_MS: z.coerce.number().int().positive().max(60_000).default(1_000),
   WORKER_JOB_TIMEOUT_MS: z.coerce
     .number()

@@ -1,8 +1,16 @@
-import type { ImageDetail, ImageMeta, ImagePage } from "@stego/contracts";
+import {
+  type ImageDetail,
+  type ImageMeta,
+  type ImagePage,
+  MAX_IMAGES_PER_USER,
+  MAX_PNG_BYTES,
+  MAX_USER_IMAGE_BYTES,
+} from "@stego/contracts";
 import type { ImageCursor, ImageRepository, ImageRow } from "@stego/db";
 import { decodeRgba, encodePng } from "@stego/image-io";
 import { newImageKey, type ObjectStore } from "@stego/storage";
 import { z } from "zod";
+import type { ConcurrencyLimit } from "../../lib/concurrency-limit.ts";
 
 /** The bytes are not a PNG, JPEG or WebP, whatever the client claimed. */
 export class UnsupportedImageError extends Error {
@@ -12,7 +20,9 @@ export class UnsupportedImageError extends Error {
 export interface ImageService {
   /**
    * Stores an upload as a fresh PNG. Throws `UnsupportedImageError` for other formats and image-io's
-   * `InvalidImageError` for bytes that do not decode (corrupt, or over the pixel limit).
+   * `InvalidImageError` for bytes that do not decode (corrupt, or over the pixel limit),
+   * `QuotaExceededError` and `ImageTooLargeError` for the size caps, and `BusyError` when every decode
+   * slot is taken.
    */
   upload(userId: string, bytes: Uint8Array): Promise<ImageMeta>;
   list(userId: string, options: { limit: number; after?: ImageCursor }): Promise<ImagePage>;
@@ -27,7 +37,32 @@ export interface ImageServiceDeps {
   storage: Pick<ObjectStore, "put" | "delete" | "presignGet">;
   /** How long a presigned URL from `get` stays valid. */
   urlTtlSeconds: number;
+  /** Bounds concurrent decodes; a full limit makes `upload` throw `BusyError`. */
+  decodeLimit: ConcurrencyLimit;
+  limits?: ImageLimits;
   now?: () => number;
+}
+
+export interface ImageLimits {
+  maxImages: number;
+  maxUserBytes: number;
+  maxPngBytes: number;
+}
+
+export const DEFAULT_IMAGE_LIMITS: ImageLimits = {
+  maxImages: MAX_IMAGES_PER_USER,
+  maxUserBytes: MAX_USER_IMAGE_BYTES,
+  maxPngBytes: MAX_PNG_BYTES,
+};
+
+/** The user already stores as many images, or as many bytes, as allowed. */
+export class QuotaExceededError extends Error {
+  override readonly name = "QuotaExceededError";
+}
+
+/** The re-encoded PNG is over the size ceiling. */
+export class ImageTooLargeError extends Error {
+  override readonly name = "ImageTooLargeError";
 }
 
 // Decoders have a long history of bugs, so only formats worth the risk reach them, picked by magic
@@ -60,28 +95,43 @@ export function createImageService({
   images,
   storage,
   urlTtlSeconds,
+  decodeLimit,
+  limits = DEFAULT_IMAGE_LIMITS,
   now = Date.now,
 }: ImageServiceDeps): ImageService {
   return {
     async upload(userId, bytes) {
       if (!isSupportedFormat(bytes)) throw new UnsupportedImageError("Unsupported image format");
+      // Cheap early refusal; `create` below checks again, atomically.
+      const used = await images.usage(userId);
+      if (used.count >= limits.maxImages || used.bytes >= limits.maxUserBytes) {
+        throw new QuotaExceededError();
+      }
       // Decoding and re-encoding drops every metadata chunk (EXIF, GPS, text) and any trailing data, and
-      // applies the EXIF orientation. The original bytes are never stored.
-      const decoded = await decodeRgba(bytes);
-      const png = await encodePng(decoded);
+      // applies the EXIF orientation. The original bytes are never stored. A decode holds up to 64 MiB of
+      // pixels, so only a few run at once.
+      const { decoded, png } = await decodeLimit.run(async () => {
+        const decoded = await decodeRgba(bytes);
+        return { decoded, png: await encodePng(decoded) };
+      });
+      if (png.byteLength > limits.maxPngBytes) throw new ImageTooLargeError();
       const key = newImageKey(userId);
       await storage.put(key, png);
       try {
-        const row = await images.create({
-          userId,
-          kind: "original",
-          storageKey: key,
-          format: "png",
-          width: decoded.width,
-          height: decoded.height,
-          sizeBytes: png.byteLength,
-          sha256: new Bun.CryptoHasher("sha256").update(png).digest("hex"),
-        });
+        const row = await images.create(
+          {
+            userId,
+            kind: "original",
+            storageKey: key,
+            format: "png",
+            width: decoded.width,
+            height: decoded.height,
+            sizeBytes: png.byteLength,
+            sha256: new Bun.CryptoHasher("sha256").update(png).digest("hex"),
+          },
+          { maxImages: limits.maxImages, maxBytes: limits.maxUserBytes },
+        );
+        if (!row) throw new QuotaExceededError();
         return toImageMeta(row);
       } catch (error) {
         await storage.delete(key).catch((cleanup) => {

@@ -7,6 +7,7 @@ import {
   type NewImage,
 } from "./images.ts";
 import { createMemoryImageRepository, createTestDatabase } from "./testing/index.ts";
+import type { ImageRow } from "./types.ts";
 
 // Shared contract: the Postgres repository and the in-memory fake the API tests use must agree.
 // The Postgres run needs TEST_DATABASE_URL.
@@ -69,6 +70,19 @@ function newImage(userId: string, overrides: Partial<NewImage> = {}): NewImage {
 
 const sleep = () => Bun.sleep(5);
 
+/** Limits nothing in these tests reaches. */
+const ROOMY = { maxImages: 1_000, maxBytes: 1e12 };
+
+async function add(
+  images: ImageRepository,
+  userId: string,
+  image = newImage(userId),
+): Promise<ImageRow> {
+  const row = await images.create(image, ROOMY);
+  expect(row).not.toBeNull();
+  return row as ImageRow;
+}
+
 describe.each(backends)("image repository (%s)", (_name, make) => {
   let backend: Backend;
   let images: ImageRepository;
@@ -80,7 +94,7 @@ describe.each(backends)("image repository (%s)", (_name, make) => {
   test("create returns the stored row", async () => {
     const userId = await backend.newUser();
     const input = newImage(userId);
-    const row = await images.create(input);
+    const row = await add(images, userId, input);
     expect(row).toMatchObject({
       user_id: userId,
       kind: "original",
@@ -98,7 +112,7 @@ describe.each(backends)("image repository (%s)", (_name, make) => {
   test("findOwned and deleteOwned never see another user's image", async () => {
     const owner = await backend.newUser();
     const other = await backend.newUser();
-    const row = await images.create(newImage(owner));
+    const row = await add(images, owner);
 
     expect(await images.findOwned(other, row.id)).toBeNull();
     expect(await images.deleteOwned(other, row.id)).toBeNull();
@@ -107,7 +121,7 @@ describe.each(backends)("image repository (%s)", (_name, make) => {
 
   test("deleteOwned returns the deleted row", async () => {
     const userId = await backend.newUser();
-    const row = await images.create(newImage(userId));
+    const row = await add(images, userId);
     expect(await images.deleteOwned(userId, row.id)).toEqual(row);
     expect(await images.findOwned(userId, row.id)).toBeNull();
     expect(await images.deleteOwned(userId, row.id)).toBeNull();
@@ -117,7 +131,7 @@ describe.each(backends)("image repository (%s)", (_name, make) => {
     const userId = await backend.newUser();
     const ids: string[] = [];
     for (let i = 0; i < 5; i++) {
-      ids.unshift((await images.create(newImage(userId))).id);
+      ids.unshift((await add(images, userId)).id);
       await sleep();
     }
 
@@ -137,8 +151,8 @@ describe.each(backends)("image repository (%s)", (_name, make) => {
 
   test("a page that ends exactly at the last row has no next cursor", async () => {
     const userId = await backend.newUser();
-    await images.create(newImage(userId));
-    await images.create(newImage(userId));
+    await add(images, userId);
+    await add(images, userId);
     const page = await images.listPage(userId, { limit: 2 });
     expect(page.images).toHaveLength(2);
     expect(page.next).toBeNull();
@@ -146,7 +160,7 @@ describe.each(backends)("image repository (%s)", (_name, make) => {
 
   test("rows created in the same instant keep a stable order", async () => {
     const userId = await backend.newUser();
-    for (let i = 0; i < 6; i++) await images.create(newImage(userId));
+    for (let i = 0; i < 6; i++) await add(images, userId);
 
     const first = await images.listPage(userId, { limit: 3 });
     const second = await images.listPage(userId, { limit: 3, after: first.next as ImageCursor });
@@ -159,12 +173,60 @@ describe.each(backends)("image repository (%s)", (_name, make) => {
   test("listPage only returns the user's own images", async () => {
     const userId = await backend.newUser();
     const other = await backend.newUser();
-    const mine = await images.create(newImage(userId));
-    await images.create(newImage(other));
+    const mine = await add(images, userId);
+    await add(images, other);
 
     const page = await images.listPage(userId, { limit: 10 });
     expect(page.images.map((r) => r.id)).toEqual([mine.id]);
     expect(page.next).toBeNull();
+  });
+
+  test("usage counts the user's images and bytes", async () => {
+    const userId = await backend.newUser();
+    const other = await backend.newUser();
+    expect(await images.usage(userId)).toEqual({ count: 0, bytes: 0 });
+    await add(images, userId, newImage(userId, { sizeBytes: 100 }));
+    await add(images, userId, newImage(userId, { sizeBytes: 250 }));
+    await add(images, other);
+    expect(await images.usage(userId)).toEqual({ count: 2, bytes: 350 });
+  });
+
+  test("create refuses an image over the count quota", async () => {
+    const userId = await backend.newUser();
+    const quota = { maxImages: 2, maxBytes: 1e12 };
+    expect(await images.create(newImage(userId), quota)).not.toBeNull();
+    expect(await images.create(newImage(userId), quota)).not.toBeNull();
+    expect(await images.create(newImage(userId), quota)).toBeNull();
+    expect((await images.usage(userId)).count).toBe(2);
+    // Another user has their own allowance.
+    expect(await images.create(newImage(await backend.newUser()), quota)).not.toBeNull();
+  });
+
+  test("create refuses an image that would pass the byte quota, and allows one that fills it", async () => {
+    const userId = await backend.newUser();
+    const quota = { maxImages: 100, maxBytes: 1_000 };
+    expect(await images.create(newImage(userId, { sizeBytes: 600 }), quota)).not.toBeNull();
+    expect(await images.create(newImage(userId, { sizeBytes: 401 }), quota)).toBeNull();
+    expect(await images.create(newImage(userId, { sizeBytes: 400 }), quota)).not.toBeNull();
+  });
+
+  test("concurrent creates cannot overshoot the quota", async () => {
+    const userId = await backend.newUser();
+    const quota = { maxImages: 3, maxBytes: 1e12 };
+    const results = await Promise.all(
+      Array.from({ length: 8 }, () => images.create(newImage(userId), quota)),
+    );
+    expect(results.filter(Boolean)).toHaveLength(3);
+    expect((await images.usage(userId)).count).toBe(3);
+  });
+
+  test("deleting an image frees its quota", async () => {
+    const userId = await backend.newUser();
+    const quota = { maxImages: 1, maxBytes: 1e12 };
+    const row = await images.create(newImage(userId), quota);
+    expect(await images.create(newImage(userId), quota)).toBeNull();
+    await images.deleteOwned(userId, (row as ImageRow).id);
+    expect(await images.create(newImage(userId), quota)).not.toBeNull();
   });
 });
 

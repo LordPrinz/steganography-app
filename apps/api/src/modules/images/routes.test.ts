@@ -17,6 +17,7 @@ import { createMemoryImageRepository, createTestDatabase } from "@stego/db/testi
 import { decodePng, encodePng } from "@stego/image-io";
 import { createMemoryObjectStore, type ObjectStore } from "@stego/storage";
 import { createServer, type ServerDeps } from "../../app.ts";
+import { createConcurrencyLimit } from "../../lib/concurrency-limit.ts";
 import { createRateLimiter } from "../../lib/rate-limit.ts";
 import { TEST_ORIGIN, testServerDeps } from "../../testing/server-deps.ts";
 import { IMAGE_RATE_LIMITS } from "./routes.ts";
@@ -292,6 +293,128 @@ describe.each(backends)("images API (%s)", (_name, backend) => {
 
       const bob = await client("bob@example.com");
       expect((await bob.upload(await testPng())).status).toBe(201);
+    });
+
+    test("with several file parts the first one counts", async () => {
+      const { ann } = await start();
+      const png = await testPng();
+      const send = (...parts: (Uint8Array | string)[]) => {
+        const form = new FormData();
+        for (const part of parts) {
+          form.append("file", new File([part as Uint8Array<ArrayBuffer>], "x.png"));
+        }
+        return ann.request("POST", "/images", { body: form });
+      };
+      expect((await send(png, "not an image")).status).toBe(201);
+      expect((await send("not an image", png)).status).toBe(415);
+    });
+
+    test("refuses a chunked body over the server limit", async () => {
+      const { ann } = await start();
+      const chunk = new Uint8Array(1024 * 1024);
+      let sent = 0;
+      const body = new ReadableStream({
+        pull(controller) {
+          if (sent++ < 12) controller.enqueue(chunk);
+          else controller.close();
+        },
+      });
+      const res = await ann
+        .request("POST", "/images", {
+          body,
+          headers: { "content-type": "multipart/form-data; boundary=x" },
+          duplex: "half",
+        } as RequestInit)
+        .catch(() => null);
+      // The server may cut the connection once the limit is hit.
+      expect(res === null || res.status === 413).toBe(true);
+    });
+
+    test("answers 503 with Retry-After while every decode slot is busy", async () => {
+      const decodeLimit = createConcurrencyLimit(1);
+      const { ann } = await start({ decodeLimit });
+      let release!: () => void;
+      const held = decodeLimit.run(
+        () =>
+          new Promise<void>((resolve) => {
+            release = resolve;
+          }),
+      );
+
+      const busy = await ann.upload(await testPng());
+      expect([busy.status, busy.headers.get("retry-after"), await errorCode(busy)]).toEqual([
+        503,
+        "2",
+        "busy",
+      ]);
+
+      release();
+      await held;
+      expect((await ann.upload(await testPng())).status).toBe(201);
+    });
+
+    test("refuses uploads past the image count quota, and frees it on delete", async () => {
+      const { ann, client } = await start({
+        imageLimits: { maxImages: 2, maxUserBytes: 1e12, maxPngBytes: 1e9 },
+      });
+      const first = await ann.uploadMeta(await testPng());
+      await ann.uploadMeta(await testPng());
+
+      const over = await ann.upload(await testPng());
+      expect([over.status, await errorCode(over)]).toEqual([413, "quota_exceeded"]);
+
+      const bob = await client("bob@example.com");
+      expect((await bob.upload(await testPng())).status).toBe(201);
+
+      expect((await ann.request("DELETE", `/images/${first.id}`)).status).toBe(204);
+      expect((await ann.upload(await testPng())).status).toBe(201);
+    });
+
+    test("refuses uploads past the byte quota and leaves no object behind", async () => {
+      const png = await testPng();
+      const written: string[] = [];
+      const base = createMemoryObjectStore();
+      const storage: ObjectStore = {
+        ...base,
+        put: async (key, bytes) => {
+          written.push(key);
+          await base.put(key, bytes);
+        },
+      };
+      const { ann } = await start({
+        storage,
+        imageLimits: { maxImages: 100, maxUserBytes: png.byteLength * 2 - 1, maxPngBytes: 1e9 },
+      });
+      await ann.uploadMeta(png);
+
+      const over = await ann.upload(png);
+      expect([over.status, await errorCode(over)]).toEqual([413, "quota_exceeded"]);
+      // The early check let it through (the first image alone fits); the atomic one refused, and the
+      // object written in between was removed again.
+      expect(written).toHaveLength(2);
+      expect(await base.get(written[1] as string)).toBeNull();
+      expect(await base.get(written[0] as string)).not.toBeNull();
+    });
+
+    test("refuses a re-encoded PNG over the size ceiling", async () => {
+      const png = await testPng();
+      const written: string[] = [];
+      const base = createMemoryObjectStore();
+      const storage: ObjectStore = {
+        ...base,
+        put: async (key, bytes) => {
+          written.push(key);
+          await base.put(key, bytes);
+        },
+      };
+      const { ann } = await start({
+        storage,
+        imageLimits: { maxImages: 100, maxUserBytes: 1e12, maxPngBytes: png.byteLength - 1 },
+      });
+
+      const res = await ann.upload(png);
+      expect([res.status, await errorCode(res)]).toEqual([413, "image_too_large"]);
+      expect(written).toEqual([]);
     });
 
     test("removes the object when the row cannot be saved", async () => {

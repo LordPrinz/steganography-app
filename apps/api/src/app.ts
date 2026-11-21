@@ -1,18 +1,20 @@
 import type { ImageRepository, RefreshTokenRepository, UserRepository } from "@stego/db";
+import type { KeyValueStore } from "@stego/kv";
 import type { ObjectStore } from "@stego/storage";
+import { type ConcurrencyLimit, createConcurrencyLimit } from "./lib/concurrency-limit.ts";
 import { requireOrigin } from "./lib/csrf.ts";
 import { API_PREFIX, errorResponse, HttpError, mount } from "./lib/http.ts";
-import type { KeyValueStore } from "./lib/kv/store.ts";
 import { authRoutes, createRequireUser } from "./modules/auth/routes.ts";
 import { createAuthService } from "./modules/auth/service.ts";
 import { createAccessTokens } from "./modules/auth/tokens.ts";
 import { healthRoutes } from "./modules/health/routes.ts";
 import { imageRoutes, MAX_REQUEST_BYTES } from "./modules/images/routes.ts";
-import { createImageService } from "./modules/images/service.ts";
+import { createImageService, type ImageLimits } from "./modules/images/service.ts";
 
 const ACCESS_TTL_SECONDS = 15 * 60;
 const REFRESH_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const IMAGE_URL_TTL_SECONDS = 10 * 60;
+const DECODE_SLOTS = 2;
 
 export interface ServerDeps {
   port: number;
@@ -26,6 +28,10 @@ export interface ServerDeps {
   appOrigin: string;
   /** Peers allowed to set X-Client-IP (see lib/client-ip.ts). */
   trustedProxies: ReadonlySet<string>;
+  /** Concurrent image decodes allowed in this process (default 2). Uploads beyond it get a 503. */
+  decodeLimit?: ConcurrencyLimit;
+  /** Per-user image caps (default: the contract constants). */
+  imageLimits?: ImageLimits;
 }
 
 export function createServer({
@@ -38,6 +44,8 @@ export function createServer({
   jwtSecret,
   appOrigin,
   trustedProxies,
+  decodeLimit = createConcurrencyLimit(DECODE_SLOTS),
+  imageLimits,
 }: ServerDeps) {
   const auth = createAuthService({
     users,
@@ -52,6 +60,8 @@ export function createServer({
     images,
     storage,
     urlTtlSeconds: IMAGE_URL_TTL_SECONDS,
+    decodeLimit,
+    limits: imageLimits,
   });
 
   return Bun.serve({

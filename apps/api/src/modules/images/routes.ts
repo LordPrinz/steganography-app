@@ -6,13 +6,20 @@ import {
   MAX_UPLOAD_BYTES,
 } from "@stego/contracts";
 import { InvalidImageError } from "@stego/image-io";
+import type { KeyValueStore } from "@stego/kv";
 import type { BunRequest } from "bun";
 import { z } from "zod";
-import { HttpError, json, readBody } from "../../lib/http.ts";
-import type { KeyValueStore } from "../../lib/kv/store.ts";
+import { BusyError } from "../../lib/concurrency-limit.ts";
+import { HttpError, json } from "../../lib/http.ts";
 import { createRateLimiter, enforce, type RateLimitOptions } from "../../lib/rate-limit.ts";
 import type { RequireUser } from "../auth/routes.ts";
-import { decodeCursor, type ImageService, UnsupportedImageError } from "./service.ts";
+import {
+  decodeCursor,
+  type ImageService,
+  ImageTooLargeError,
+  QuotaExceededError,
+  UnsupportedImageError,
+} from "./service.ts";
 
 export const IMAGE_RATE_LIMITS = {
   // Per user: every upload decodes and re-encodes an image, the API's most expensive request.
@@ -54,6 +61,21 @@ export function imageRoutes({ images, kv, requireUser }: ImageRoutesDeps) {
         } catch (error) {
           if (error instanceof UnsupportedImageError) {
             throw new HttpError(415, "unsupported_image", "Upload a PNG, JPEG or WebP image");
+          }
+          if (error instanceof BusyError) {
+            throw new HttpError(503, "busy", "Busy, try again shortly", undefined, {
+              "Retry-After": "2",
+            });
+          }
+          if (error instanceof QuotaExceededError) {
+            throw new HttpError(
+              413,
+              "quota_exceeded",
+              "Storage quota reached; delete some images first",
+            );
+          }
+          if (error instanceof ImageTooLargeError) {
+            throw new HttpError(413, "image_too_large", "The image is too large once re-encoded");
           }
           if (error instanceof InvalidImageError) {
             throw new HttpError(
@@ -99,12 +121,15 @@ async function readUpload(req: Request): Promise<Uint8Array> {
   if (!/^multipart\/form-data\s*;/i.test(contentType)) {
     throw new HttpError(415, "unsupported_media_type", "Send the image as multipart/form-data");
   }
-  const body = await readBody(req, MAX_REQUEST_BYTES);
-  const form = await new Response(body, { headers: { "content-type": contentType } })
-    .formData()
-    .catch(() => {
-      throw new HttpError(400, "invalid_request", "Malformed multipart body");
-    });
+  // Parsed straight from the request to avoid holding a second copy of the body. Bun's server limit
+  // stops chunked bodies at MAX_REQUEST_BYTES; a declared length is refused before reading.
+  if (Number(req.headers.get("content-length")) > MAX_REQUEST_BYTES) {
+    throw new HttpError(413, "payload_too_large", "Request body is too large");
+  }
+  const form = await req.formData().catch(() => {
+    throw new HttpError(400, "invalid_request", "Malformed multipart body");
+  });
+  // With several `file` parts the first one counts.
   const file = form.get("file");
   if (!(file instanceof File)) {
     throw new HttpError(400, "invalid_request", 'Expected a "file" part holding the image');
@@ -113,5 +138,5 @@ async function readUpload(req: Request): Promise<Uint8Array> {
     throw new HttpError(413, "payload_too_large", "Image is too large");
   }
   if (file.size === 0) throw new HttpError(400, "invalid_request", "The file is empty");
-  return new Uint8Array(await file.arrayBuffer());
+  return file.bytes();
 }

@@ -62,7 +62,7 @@ export async function readBody(req: Request, maxBytes: number): Promise<Uint8Arr
       chunks.push(chunk.value);
     }
   }
-  return Buffer.concat(chunks);
+  return chunks.length === 1 ? (chunks[0] as Uint8Array) : Buffer.concat(chunks);
 }
 
 /** Parses a JSON body against a contract schema; any failure is a 400 that never echoes the input. */

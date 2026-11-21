@@ -1,8 +1,8 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { ApiError, HealthResponse, ReadinessResponse } from "@stego/contracts";
+import { createMemoryStore } from "@stego/kv";
 import { createMemoryObjectStore } from "@stego/storage";
 import { createServer } from "./app.ts";
-import { createMemoryStore } from "./lib/kv/memory.ts";
 import { testServerDeps } from "./testing/server-deps.ts";
 
 const kv = createMemoryStore();

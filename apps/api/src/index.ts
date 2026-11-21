@@ -4,11 +4,11 @@ import {
   createRefreshTokenRepository,
   createUserRepository,
 } from "@stego/db";
+import { createRedisStore, keepConnected } from "@stego/kv";
 import { createS3ObjectStore } from "@stego/storage";
 import { RedisClient } from "bun";
 import { createServer } from "./app.ts";
 import { loadEnv } from "./env.ts";
-import { createRedisStore, keepConnected } from "./lib/kv/redis.ts";
 
 const env = loadEnv();
 const redis = new RedisClient(env.REDIS_URL, { enableOfflineQueue: false });

@@ -13,7 +13,7 @@ keeps. Bun 1.4 ships a Redis client (`RedisClient` / `Bun.redis`), so Redis adds
 ## Decision
 
 - Redis holds only short-lived state that can be lost: rate-limit counters and small caches.
-- The API reaches it through a narrow `KeyValueStore` port (`get`, `set` with TTL, `del`, atomic
+- The API and the worker reach it through a narrow `KeyValueStore` port, shared in `@stego/kv` (`get`, `set` with TTL, `del`, atomic
   `increment`, `ping`). The composition root creates the Bun `RedisClient` adapter. Tests use an
   in-memory fake, and the same contract suite runs against a real Redis when `TEST_REDIS_URL` is set.
 - The client runs with `enableOfflineQueue: false` and reconnects in the background. While Redis is
@@ -35,3 +35,22 @@ keeps. Bun 1.4 ships a Redis client (`RedisClient` / `Bun.redis`), so Redis adds
   are skipped rather than blocking every login, since argon2 still makes each guess expensive. The
   denylist is skipped too, so a logged-out access token stays valid until it expires (15 minutes at most).
   The refresh token is revoked in Postgres either way, so the session cannot be extended.
+
+## Update: the hidden message in transit (#50)
+
+Redis also carries the hidden message between API and worker, in both directions, because it may never
+reach Postgres or the logs.
+
+- Encode: the API stores the message under `op:{operationId}:message` with a 15-minute TTL in the request
+  that enqueues the job. The job row only holds the operation id. The worker reads it on every attempt and
+  deletes it when the job is succeeded or failed for good. If it is gone, the job fails with
+  `message_expired` and is not retried.
+- Decode: the worker stores the revealed message under `op:{operationId}:revealed` with a 5-minute TTL.
+  The operation's `GET` returns it while the key exists. The stored result keeps only the outcome.
+- Key names are built from the operation id alone, and a message may not exceed the engine's
+  `MAX_MESSAGE_BYTES`.
+- The worker needs Redis (`REDIS_URL`) and claims no job while Redis does not answer, since it could not
+  read the message.
+- With the AOF enabled, a deleted or expired message can stay in the append-only file until the next
+  rewrite. Redis still holds no message for longer than its TTL, but the file is disk, so it must be
+  protected like the database.

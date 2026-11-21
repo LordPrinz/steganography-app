@@ -1,8 +1,8 @@
 import { type AuthResponse, type AuthUser, LoginRequest, RegisterRequest } from "@stego/contracts";
+import type { KeyValueStore } from "@stego/kv";
 import type { BunRequest, CookieInit, Server } from "bun";
 import { clientIp, ipBucket } from "../../lib/client-ip.ts";
 import { API_PREFIX, errorResponse, HttpError, json, parseBody } from "../../lib/http.ts";
-import type { KeyValueStore } from "../../lib/kv/store.ts";
 import {
   createRateLimiter,
   enforce,

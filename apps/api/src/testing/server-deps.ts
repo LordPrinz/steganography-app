@@ -3,9 +3,9 @@ import {
   createMemoryRefreshTokenRepository,
   createMemoryUserRepository,
 } from "@stego/db/testing";
+import { createMemoryStore } from "@stego/kv";
 import { createMemoryObjectStore } from "@stego/storage";
 import type { ServerDeps } from "../app.ts";
-import { createMemoryStore } from "../lib/kv/memory.ts";
 
 export const TEST_ORIGIN = "http://localhost:3000";
 export const TEST_JWT_SECRET = "test-secret-that-is-at-least-32-chars";

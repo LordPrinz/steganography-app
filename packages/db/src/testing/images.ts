@@ -9,8 +9,17 @@ export function createMemoryImageRepository(): ImageRepository {
     return row?.user_id === userId ? row : null;
   };
 
+  const usage = (userId: string) => {
+    const own = [...images.values()].filter((row) => row.user_id === userId);
+    return { count: own.length, bytes: own.reduce((sum, row) => sum + row.size_bytes, 0) };
+  };
+
   return {
-    async create(image) {
+    async create(image, quota) {
+      const used = usage(image.userId);
+      if (used.count >= quota.maxImages || used.bytes + image.sizeBytes > quota.maxBytes) {
+        return null;
+      }
       const row: ImageRow = {
         id: crypto.randomUUID(),
         user_id: image.userId,
@@ -25,6 +34,10 @@ export function createMemoryImageRepository(): ImageRepository {
       };
       images.set(row.id, row);
       return { ...row };
+    },
+
+    async usage(userId) {
+      return usage(userId);
     },
 
     async findOwned(userId, id) {

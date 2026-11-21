@@ -27,9 +27,25 @@ export interface ImagePage {
   next: ImageCursor | null;
 }
 
+export interface ImageQuota {
+  maxImages: number;
+  maxBytes: number;
+}
+
+export interface ImageUsage {
+  count: number;
+  bytes: number;
+}
+
 /** Every lookup takes the owner's id, so a caller cannot reach another user's image by id alone. */
 export interface ImageRepository {
-  create(image: NewImage): Promise<ImageRow>;
+  /**
+   * Inserts the row unless that would take the user over `quota` (already `maxImages` images, or
+   * `maxBytes` with this one). Returns null then. The check and the insert are one step per user, so
+   * concurrent uploads cannot overshoot.
+   */
+  create(image: NewImage, quota: ImageQuota): Promise<ImageRow | null>;
+  usage(userId: string): Promise<ImageUsage>;
   findOwned(userId: string, id: string): Promise<ImageRow | null>;
   /** Newest first. `limit` rows after `after` (the start when omitted). */
   listPage(userId: string, options: { limit: number; after?: ImageCursor }): Promise<ImagePage>;
@@ -39,17 +55,36 @@ export interface ImageRepository {
 
 type ImageRowWithCursor = ImageRow & { cursor_at: string };
 
+async function readUsage(sql: SQL, userId: string): Promise<ImageUsage> {
+  // sum() of an integer column is a bigint, which Bun returns as a string.
+  const [row] = await sql<{ count: number; bytes: string }[]>`
+    SELECT count(*)::int AS count, coalesce(sum(size_bytes), 0)::bigint AS bytes
+    FROM images WHERE user_id = ${userId}
+  `;
+  return { count: row?.count ?? 0, bytes: Number(row?.bytes ?? 0) };
+}
+
 export function createImageRepository(sql: SQL): ImageRepository {
   return {
-    async create(image) {
-      const [row] = await sql<ImageRow[]>`
-        INSERT INTO images (user_id, kind, storage_key, format, width, height, size_bytes, sha256)
-        VALUES (${image.userId}, ${image.kind}, ${image.storageKey}, ${image.format}, ${image.width},
-                ${image.height}, ${image.sizeBytes}, ${image.sha256})
-        RETURNING *
-      `;
-      return row as ImageRow;
+    create(image, quota) {
+      return sql.begin(async (tx) => {
+        // Serialises one user's uploads, so the usage read below cannot go stale before the insert.
+        await tx`SELECT 1 FROM users WHERE id = ${image.userId} FOR UPDATE`;
+        const used = await readUsage(tx, image.userId);
+        if (used.count >= quota.maxImages || used.bytes + image.sizeBytes > quota.maxBytes) {
+          return null;
+        }
+        const [row] = await tx<ImageRow[]>`
+          INSERT INTO images (user_id, kind, storage_key, format, width, height, size_bytes, sha256)
+          VALUES (${image.userId}, ${image.kind}, ${image.storageKey}, ${image.format}, ${image.width},
+                  ${image.height}, ${image.sizeBytes}, ${image.sha256})
+          RETURNING *
+        `;
+        return row as ImageRow;
+      });
     },
+
+    usage: (userId) => readUsage(sql, userId),
 
     async findOwned(userId, id) {
       const [row] = await sql<ImageRow[]>`
