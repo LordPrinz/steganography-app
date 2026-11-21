@@ -4,6 +4,7 @@ import { Menu } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
+import { UserMenu } from "@/components/auth/user-menu.tsx";
 import { ThemeToggle } from "@/components/theme-toggle.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import {
@@ -81,7 +82,8 @@ export function SiteHeader() {
           })}
         </nav>
 
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-1">
+          <UserMenu />
           <ThemeToggle />
         </div>
       </div>

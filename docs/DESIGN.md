@@ -250,6 +250,20 @@ each kernel with a naive TS oracle, and an ASan/UBSan harness checks memory safe
     Another user's operation is a 404. The cached view is dropped with the row.
 - The hidden message is **never** stored in the database.
 
+### Web sessions
+
+- The auth cookies are scoped to `/api/v1`, so Next.js middleware and server components never see them.
+  Route protection is therefore client-side: pages under the `(app)` route group render behind
+  `RequireAuth`, which asks `GET /auth/me` and redirects to `/sign-in?next=<path>`. This is a usability
+  guard only; the API enforces access on every request.
+- The `next` value goes through `safeReturnPath`: same-origin relative paths only, never an auth page.
+- On a 401 the web client refreshes the session and repeats the request once. Refresh is single-flight
+  per tab (one shared promise) and per browser (`navigator.locks`, with a shared timestamp so a tab that
+  waited for the lock skips its own refresh), which keeps parallel tabs inside the API's 10 s rotation
+  grace window. A second 401 is returned to the caller, never looped. Requests with non-replayable bodies
+  (FormData, streams) opt out of the retry.
+- Signing in or out clears the whole query cache, so one user's data never shows for the next.
+
 ### Bun built-ins over libraries
 
 Bun ships what this project needs: `Bun.serve` (routing), `Bun.SQL` (Postgres), `RedisClient` (Redis),
