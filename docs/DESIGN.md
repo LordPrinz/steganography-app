@@ -90,6 +90,13 @@ While a job runs the worker renews `locked_at` every 30 s. A `running` job whose
 the old owner can no longer renew or complete it. On SIGTERM the worker stops claiming and finishes the job
 it holds. The operation's `status` follows its job, and each operation has at most one job.
 
+Polling stays the source of truth, and Redis only shortens the wait. After the transaction that inserts a job
+commits, the API calls `notify()` from `@stego/kv`, which publishes an empty message on `jobs:enqueued`. The
+worker listens on a Redis client of its own and, on a message, skips its pause and claims at once. Bursts of
+messages collapse into one extra claim, and the message carries no ids or params. If Redis is down, `notify()`
+logs the error and returns, so the enqueue still succeeds, and the worker finds the job on its next poll. The
+subscription is renewed after every reconnect; a message sent in between is covered by polling.
+
 `jobs.error` holds only a short code from `JobError` (`timeout`, `no_handler`, …). Any other error is
 stored as `internal_error`, and its details go only to the worker log. Handler results are stored in
 `operations.result` and errors are logged, so neither may contain the hidden message, and neither may
