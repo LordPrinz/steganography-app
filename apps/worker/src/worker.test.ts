@@ -203,6 +203,79 @@ describe("worker", () => {
     expect(performance.now() - start).toBeLessThan(500);
   });
 
+  test("wake() claims a job that appeared during a long pause", async () => {
+    const queue = fakeQueue([]);
+    const done = Promise.withResolvers<void>();
+    const worker = createWorker({
+      handoff,
+      queue,
+      log: silent,
+      pollIntervalMs: 60_000,
+      handlers: {
+        encode: async () => {
+          done.resolve();
+        },
+      },
+    });
+    const run = worker.run();
+    await Bun.sleep(5);
+    queue.claim.mockImplementationOnce(async () => fakeJob("late"));
+    const start = performance.now();
+    worker.wake();
+    await done.promise;
+    expect(performance.now() - start).toBeLessThan(500);
+    worker.stop();
+    await run;
+  });
+
+  test("a wake() that arrives while a claim is in flight is not lost", async () => {
+    const queue = fakeQueue([]);
+    const claimed = Promise.withResolvers<void>();
+    let calls = 0;
+    queue.claim.mockImplementation(async () => {
+      calls++;
+      if (calls === 1) {
+        // The job shows up after this empty answer was decided, and the hint arrives before the worker pauses.
+        await Bun.sleep(5);
+        return null;
+      }
+      claimed.resolve();
+      return null;
+    });
+    const worker = createWorker({
+      handoff,
+      queue,
+      log: silent,
+      pollIntervalMs: 60_000,
+      handlers: {},
+    });
+    const run = worker.run();
+    worker.wake();
+    await Promise.race([claimed.promise, Bun.sleep(500)]);
+    expect(calls).toBe(2);
+    worker.stop();
+    await run;
+  });
+
+  test("a burst of wake() calls leads to one extra claim, not one per call", async () => {
+    const queue = fakeQueue([]);
+    const worker = createWorker({
+      handoff,
+      queue,
+      log: silent,
+      pollIntervalMs: 60_000,
+      handlers: {},
+    });
+    const run = worker.run();
+    await Bun.sleep(5);
+    expect(queue.claim).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 50; i++) worker.wake();
+    await Bun.sleep(50);
+    expect(queue.claim).toHaveBeenCalledTimes(2);
+    worker.stop();
+    await run;
+  });
+
   test("a queue error is logged and the loop keeps polling", async () => {
     const error = mock(() => {});
     const queue = fakeQueue([]);

@@ -4,7 +4,12 @@ import {
   createJobQueue,
   createOperationRepository,
 } from "@stego/db";
-import { createMessageHandoff, createRedisStore, keepConnected } from "@stego/kv";
+import {
+  createMessageHandoff,
+  createRedisStore,
+  createRedisWakeSource,
+  keepConnected,
+} from "@stego/kv";
 import { createS3ObjectStore } from "@stego/storage";
 import { RedisClient } from "bun";
 import { loadEnv } from "./env.ts";
@@ -18,6 +23,9 @@ const sql = createDb(env.DATABASE_URL);
 const redis = new RedisClient(env.REDIS_URL, { enableOfflineQueue: false });
 keepConnected(redis);
 const kv = createRedisStore(redis);
+// A subscribed connection can run almost no other command, so the wake-up listens on its own client.
+const subscriber = new RedisClient(env.REDIS_URL, { enableOfflineQueue: false });
+keepConnected(subscriber);
 const storage = createS3ObjectStore({
   endpoint: env.S3_ENDPOINT,
   region: env.S3_REGION,
@@ -41,6 +49,8 @@ const worker = createWorker({
   jobTimeoutMs: env.WORKER_JOB_TIMEOUT_MS,
 });
 
+const stopListening = createRedisWakeSource(subscriber).listen(() => worker.wake());
+
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {
     console.info(`${signal} received, finishing the current job`);
@@ -50,6 +60,8 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 
 console.info("Worker started");
 await worker.run();
+await stopListening();
 await sql.close();
+subscriber.close();
 redis.close();
 console.info("Worker stopped");
