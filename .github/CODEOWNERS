@@ -3,6 +3,7 @@
 *                       @LordPrinz
 /packages/stego-engine/ @LordPrinz
 /packages/image-io/     @LordPrinz
+/tools/bench/          @LordPrinz
 /apps/api/              @LordPrinz
 /apps/worker/           @LordPrinz
 /packages/db/           @LordPrinz

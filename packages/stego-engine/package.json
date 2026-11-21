@@ -9,11 +9,7 @@
   "dependencies": {
     "@stego/native": "workspace:*"
   },
-  "devDependencies": {
-    "@stego/image-io": "workspace:*"
-  },
   "scripts": {
-    "bench:koch-zhao": "bun bench/koch-zhao.ts",
     "typecheck": "tsc -p ."
   }
 }
