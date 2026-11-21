@@ -4,22 +4,33 @@ import { WAKE_CHANNEL, type WakePublisher, type WakeSource } from "./wake.ts";
 export interface RedisWakeOptions {
   channel?: string;
   log?: Pick<Console, "error">;
+  /** How long `notify` waits for Redis before giving up. */
+  timeoutMs?: number;
 }
 
-/** Publishes on a shared client. While Redis is down the error is logged and the caller carries on. */
+/**
+ * Publishes on a shared client. `notify` never throws and gives up after `timeoutMs`, so a dead or
+ * half-open connection cannot hold up the enqueue response: callers may simply await it.
+ */
 export function createRedisWakePublisher(
   client: RedisClient,
-  { channel = WAKE_CHANNEL, log = console }: RedisWakeOptions = {},
+  { channel = WAKE_CHANNEL, log = console, timeoutMs = 500 }: RedisWakeOptions = {},
 ): WakePublisher {
   return {
     async notify() {
+      let timer: Timer | undefined;
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(reject, timeoutMs, new Error(`no answer from Redis in ${timeoutMs} ms`));
+      });
       try {
-        await client.publish(channel, "1");
+        await Promise.race([client.publish(channel, "1"), timeout]);
       } catch (error) {
         log.error(
           "Could not publish the job wake-up; the worker will find the job by polling:",
           error,
         );
+      } finally {
+        clearTimeout(timer);
       }
     },
   };

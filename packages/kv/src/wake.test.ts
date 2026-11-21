@@ -98,15 +98,36 @@ describe.skipIf(!redisUrl)("wake channel on Redis only", () => {
     createRedisWakeSource(subscriber, { channel }).listen(() => wakes++);
     await Bun.sleep(50);
 
-    // Drop the subscriber's connection; Bun reconnects on its own.
+    // Kills every pubsub client on this Redis, so run this only against a disposable instance.
     await publisher.send("CLIENT", ["KILL", "TYPE", "pubsub"]);
-    await Bun.sleep(300);
-    expect(subscriber.connected).toBe(true);
+    await until(() => subscriber.connected);
 
-    await createRedisWakePublisher(publisher, { channel }).notify();
-    await until(() => wakes > 0);
-    await Bun.sleep(50);
-    // Exactly one call: the reconnect must not leave a second listener behind.
-    expect(wakes).toBe(1);
+    // The resubscribe races the first publishes, so publish until one gets through.
+    const notifier = createRedisWakePublisher(publisher, { channel });
+    for (let i = 0; i < 40 && wakes === 0; i++) {
+      await notifier.notify();
+      await Bun.sleep(50);
+    }
+    expect(wakes).toBeGreaterThan(0);
+
+    // Settled: one publish must give exactly one call, so the reconnect left no second listener.
+    await Bun.sleep(100);
+    const before = wakes;
+    await notifier.notify();
+    await Bun.sleep(150);
+    expect(wakes - before).toBe(1);
+  });
+
+  test("notify gives up on a stalled connection instead of hanging", async () => {
+    const stalled = { publish: () => new Promise<number>(() => {}) } as unknown as RedisClient;
+    const logged: unknown[][] = [];
+    const publisher = createRedisWakePublisher(stalled, {
+      timeoutMs: 50,
+      log: { error: (...args: unknown[]) => void logged.push(args) },
+    });
+    const start = performance.now();
+    await publisher.notify();
+    expect(performance.now() - start).toBeLessThan(500);
+    expect(logged).toHaveLength(1);
   });
 });
