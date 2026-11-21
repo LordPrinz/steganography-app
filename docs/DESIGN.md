@@ -71,13 +71,13 @@ trip is exact. See ADR 7.
 
 ### Layered embedding
 
-`hideLayered(image, layers)` hides one message per method in the same image: DCT first, DWT second, LSB
-last, whatever order the caller lists them in. Each layer embeds its own frame through the unchanged
-codec, so `reveal(image, method)` and `measure` read one layer at a time, and `capacityLayered` reports
-each method's own capacity (a full set of layers can still fail the verification pass). DWT does not survive a later DCT pass and LSB does not survive any later
-method, so the order is fixed by measurements. A message that does not fit throws `CapacityExceededError`
-with the layer index; a layer that does not reveal after embedding throws `LayerConflictError`.
-Two layers cannot use the same method. See ADR 9.
+`hideLayered(image, layers)` hides one message per method in the same image: DCT first, DWT second, LSB last,
+whatever order the caller lists them in. Each layer embeds its own frame through the unchanged codec, so
+`reveal(image, method)` and `measure` read one layer at a time, and `capacityLayered` reports each method's
+own capacity (a full set of layers can still fail the verification pass). DWT does not survive a later DCT
+pass and LSB does not survive any later method, so the order is fixed by measurements. A message that does not
+fit throws `CapacityExceededError` with the layer index; a layer that does not reveal after embedding throws
+`LayerConflictError`. Two layers cannot use the same method. See ADR 9.
 
 Engine source and tests stay free of I/O. Experiments that need image files or attacks live in the bench CLI (`tools/bench`), which depends on engine, `image-io` and `contracts`; its fixtures are in `tools/bench/images`.
 
@@ -120,14 +120,18 @@ apps import. Only losable, short-lived data goes there; anything durable stays i
 `GET /api/v1/health/ready` reports 503 when Redis is down, and the worker claims no job while Redis does
 not answer. See ADR 3.
 
-The hidden message never reaches Postgres or the logs. For encode, the API stores it under
-`op:{operationId}:message` (TTL 15 min, at most `MAX_MESSAGE_BYTES`) in the request that enqueues the
-job. The handler reads it with `context.message()` on every attempt, so retries work. The worker deletes
-it once the job is succeeded or failed for good. A missing or expired message fails the job with
-`message_expired` and no retry. For decode, the handler calls `context.reveal()`, which stores the text
-under `op:{operationId}:revealed` (TTL 5 min). `GET` on the operation returns it while the key exists;
-afterwards the history shows only the outcome. Key names use the operation id only. Redis keeps an AOF on
-disk, so a message can outlive its delete in the file until the next rewrite; the TTLs bound the window.
+The hidden messages never reach Postgres or the logs. For encode and experiments, the API stores them under
+`op:{operationId}:message` as one JSON array, one message per layer in request order (TTL 15 min, each at most
+`MAX_MESSAGE_BYTES`, at most 3), in the request that enqueues the job. The handler reads them with
+`context.messages()` on every attempt, so retries work. The worker deletes the entry once the job is succeeded
+or failed for good. A missing or expired entry fails the job with `message_expired` and no retry. For decode,
+the handler calls `context.reveal()` with every message it found, by method id, which is stored as a JSON
+object under `op:{operationId}:revealed` (TTL 5 min). `GET` on the operation returns it as `revealed` while
+the key exists; afterwards the history shows only the outcome. Key names use the operation id only. Redis
+keeps an AOF on disk, so a message can outlive its delete in the file until the next rewrite; the TTLs bound
+the window. A value in the older plain-string format, or any entry with more than 3 messages or a message over
+the byte limit, reads as absent (`message_expired`), so messages in flight at a deploy of this format are lost
+and must be sent again.
 
 ### Image processing on Bun.Image
 
@@ -212,32 +216,49 @@ each kernel with a naive TS oracle, and an ASan/UBSan harness checks memory safe
   `GET /api/v1/operations/:id`):
   - A request names a method with its parameters and an optional error-correcting code (repetition or
     Hamming(7,4)). Each method has a zod schema in `@stego/contracts` that fills in defaults and checks the
-    ranges, and the engine's `createMethod` registry builds the method. Encode takes `layers` (exactly one
-    until layered embedding exists); decode takes one method or `"auto"`, which tries every method with its
-    default parameters and no error correction.
-  - The source image must be the user's own (404 `image_not_found` otherwise). For encode the message is
-    checked against the capacity before anything is queued: 422 `message_too_large` with `needed` and
-    `available` in bytes (the message itself is never echoed).
-  - The API stores the message in Redis first, then inserts the operation and its job in one transaction,
-    then calls `notify()`. If the insert fails or the user is over the cap, the message is deleted at once.
+    ranges, and the engine's `createMethod` registry builds the method. Encode takes `layers`: 1 to 3 entries
+    `{ method, message }` with different methods (a code does not make a method different; 400 otherwise).
+    The engine fixes the embedding order (ADR 9), so the order in the request only matters for reporting.
+    Decode takes `"auto"`, one method, or a list of 1 to 3 methods with different ids. `"auto"` tries every
+    method with its default parameters and no error correction; a method or list tries exactly those, so a
+    layer with other parameters or a code is read by naming it. Every layer found is revealed, by method id.
+    A list (like a layered encode) has no single method and shows as `auto` in the history.
+  - The source image must be the user's own (404 `image_not_found` otherwise). For encode each message is
+    checked against its own method's capacity (`capacityLayered`) before anything is queued: 422
+    `message_too_large` with `needed`, `available` in bytes, the `method` and the `layer` (index in the
+    request) of the first that does not fit. No message is ever echoed.
+  - The API stores the messages in Redis first, then inserts the operation and its job in one transaction,
+    then calls `notify()`. If the insert fails or the user is over the cap, the messages are deleted at once.
     The answer is 202 with the operation id and a `Location` header.
   - Limits per user: 120 requests per hour (Redis), and at most 5 queued or running operations (counted in
     Postgres under the same per-user row lock as the image quota, so concurrent requests cannot overshoot;
     429 `too_many_operations`).
-  - The worker loads the source through an owner-scoped lookup, runs the codec, and for encode stores the
-    stego PNG under the user's prefix as a new `images` row of kind `stego` (same quota and 32 MiB ceiling as
-    uploads), then records it in `operations.result_image_id`. Permanent problems (`source_missing`,
-    `invalid_image`, `invalid_params`, `capacity_exceeded`, `image_too_large`, `quota_exceeded`) fail the job
-    without retries.
-  - `operations.result` holds metrics only. Encode: message bytes, capacity bytes, PSNR and time; PSNR is
-    `null` when the stego image is identical to the source (infinite PSNR has no JSON form). Decode: one
+  - `operations.params` of an encode holds the layers' method selections in request order and no message.
+    `operations.method` is that method for one layer and null for several, so a layered encode shows as
+    `auto` in the history and in the `method` filter (as a decode that tries every method does).
+  - The worker loads the source through an owner-scoped lookup, runs the codec (`hideLayered`), and for encode
+    stores the stego PNG under the user's prefix as a new `images` row of kind `stego` (same quota and 32 MiB
+    ceiling as uploads), then records it in `operations.result_image_id`. Permanent problems
+    (`source_missing`, `invalid_image`, `invalid_params`, `capacity_exceeded`, `layer_conflict`,
+    `image_too_large`, `image_too_small`, `quota_exceeded`) fail the job without retries. The error codes stay
+    bare. A layered failure (`capacity_exceeded` or `layer_conflict`) also carries the zero-based index of the
+    layer in the request: `JobError.layer`, stored by the queue in `jobs.failure_layer` (smallint, 0 to 2) and
+    shown as `failedLayer` on the operation, for a failed operation only, like `error`. A later failure
+    replaces the value, so a retry never keeps an earlier attempt's layer. The result stays null and no
+    message reaches an error. `layer_conflict` means the layers cannot share this image (ADR 9); shortening
+    the message or dropping a layer helps.
+  - `operations.result` holds metrics only. Encode: per layer the method, message bytes and capacity
+    bytes, and for the whole image PSNR, SSIM and time; PSNR is `null` when the stego image is identical to
+    the source (infinite PSNR has no JSON form) and SSIM when a side is under 11 pixels. Decode: one
     attempt per method with its outcome (`found`, `no-message`, `corrupted`, `method-mismatch`), message
-    bytes, capacity and time, plus the first method that found a message.
+    bytes, capacity and time, the first method that found a message (`detected`) and all of them
+    (`found`). Results of an earlier shape (before layered encode) no longer parse and read as null.
   - `GET` is scoped to the owner, and another user's operation is a 404. It adds a presigned URL for the
-    result image and, for a succeeded decode, the revealed message while its Redis key lives. It answers with
-    `Cache-Control: no-store`. Succeeded and failed operations never change, so their stored fields are
-    cached in Redis for 10 minutes (cache-aside, with the owner's id inside the entry); the URL and the
-    revealed message are never cached. If Redis is down the read falls back to Postgres.
+    result image and, for a succeeded decode, the revealed messages (an object by method id) while their Redis
+    key lives. It answers with `Cache-Control: no-store`. Succeeded and failed operations never change, so
+    their stored fields are cached in Redis for 10 minutes (cache-aside, with the owner's id inside the
+    entry); the URL and the revealed message are never cached. If Redis is down the read falls back to
+    Postgres.
 - History (`GET /api/v1/operations`, `DELETE /api/v1/operations/:id`):
   - The list is the owner's operations newest first, paged with the same opaque keyset cursor on
     `(created_at, id)` as the gallery (default 24, at most 100), backed by `operations_user_history_idx`.
@@ -251,12 +272,14 @@ each kernel with a naive TS oracle, and an ASan/UBSan harness checks memory safe
     gallery). A queued or running one is a 409 `operation_active`, because the worker still writes to it.
     Another user's operation is a 404. The cached view and any revealed message are dropped with the row.
 - Robustness lab (`POST /api/v1/experiments`, `GET /api/v1/experiments/:id`):
-  - Mode A hides the message with every registered method (default parameters, no code) and attacks each
-    stego image with the 11 default scenarios (no attack, JPEG 90/75/50, resize 0.75/0.5, blur 0.5/1/2,
-    resize 0.5 + JPEG 75, blur 1 + JPEG 75): 33 variants. Mode B takes one method with its parameters and
-    optional code, plus 1 to 16 scenarios that chain at most 48 attacks in total (400 `invalid_request`). The API expands both into explicit `methods` and `scenarios`
-    lists in `operations.params`, so a later change to the defaults cannot alter a queued job. The code
-    sits next to the method id, as in encode.
+  - Mode A hides the message with every registered method (default parameters, no code) and attacks each stego
+    image with the 11 default scenarios (no attack, JPEG 90/75/50, resize 0.75/0.5, blur 0.5/1/2, resize 0.5 +
+    JPEG 75, blur 1 + JPEG 75): 33 variants. Mode B takes one method with its parameters and optional code,
+    and mode `layered` takes 1 to 3 layers (`{ method, message }`, different methods, one message each) that
+    `hideLayered` hides together in one image, plus 1 to 16 scenarios that chain at most 48 attacks in total
+    (400 `invalid_request`). The API expands both into explicit `methods` and `scenarios` lists in
+    `operations.params`, so a later change to the defaults cannot alter a queued job. The code sits next to
+    the method id, as in encode.
   - Limits: an image of at most 1024 x 1024 pixels (422 `experiment_image_too_large`, with `pixels` and
     `maxPixels`), at most 36 variants (400 `too_many_variants`), and a message that fits every method it
     runs (422 `message_too_large` with `needed`, `available` and the `method` that failed first; in mode A
@@ -267,22 +290,31 @@ each kernel with a naive TS oracle, and an ASan/UBSan harness checks memory safe
     worker checks both image limits again (`image_too_large`, `image_too_small`).
   - The source of an experiment or an encode must be an original or stego image: a variant is a 404
     `image_not_found` there. A decode may take a variant, so the user can try to read what survived.
-  - The message follows the encode path: Redis only, never `operations.params`, the result or the logs.
+  - Layered mode: variants are layers x scenarios, so the 36 cap bites earlier (3 layers allow 12
+    scenarios; 400 `too_many_variants`). Every layer's message is checked against its own method's
+    capacity (422 `message_too_large` with `method` and `layer`). The worker embeds once with
+    `hideLayered`, attacks the stego image per scenario and measures every layer on it, so the result has
+    one variant per layer and scenario with its own success, BER and channel BER, and aggregates per
+    layer. All layers of a scenario share one stored image (one `variant` row), which is why the 512 MiB
+    cap counts it once. A layered method summary repeats the whole image's PSNR, SSIM and embed time on
+    every layer, and `messageBytes` is the sum over the layers. The history shows a layered experiment
+    as `auto`, like mode A.
+  - The messages follow the encode path: Redis only, never `operations.params`, the result or the logs.
   - The worker hides the message once per method, then for each scenario attacks the stego image, reads the
     message back with `measure` and compares the attacked image with the cover (PSNR, SSIM). `result` holds
     per-variant metrics, per-method embedding metrics and aggregates (success rate and mean BER per method
     and scenario, with the attack type and its strength for a table or a line chart). It has no message.
   - Every attacked image is stored as an `images` row of kind `variant` with `expires_at` 24 hours ahead.
-    Variants are not in the gallery and not in the image quota (the gallery index is partial, `WHERE kind
-    <> 'variant'`). They have their own cap: 512 MiB of unexpired variant bytes per user, checked in
-    `createVariant` under the same per-user row lock as uploads. Over the cap the image is not stored,
-    the variant's `imageId` is `null` and the experiment goes on with its metrics. A worker cron (`Bun.cron`, every 15 minutes) deletes expired variants, object first and
-    row second, so a failure leaves a row the next run retries. Batches page by `(expires_at, id)`, so a
-    row that keeps failing does not hold back newer ones. An expired variant is served by no endpoint
-    (no URL) even before the sweep removes it. A retried job (after a crash) may leave
-    the variants of the failed attempt behind; they count against the 512 MiB cap until they expire with
-    the TTL like the rest. Deleting an
-    experiment from the history does not delete its variants; they also expire.
+    Variants are not in the gallery and not in the image quota (the gallery index is partial, `WHERE kind <>
+    'variant'`). They have their own cap: 512 MiB of unexpired variant bytes per user, checked in
+    `createVariant` under the same per-user row lock as uploads. Over the cap the image is not stored, the
+    variant's `imageId` is `null` and the experiment goes on with its metrics. A worker cron (`Bun.cron`,
+    every 15 minutes) deletes expired variants, object first and row second, so a failure leaves a row the
+    next run retries. Batches page by `(expires_at, id)`, so a row that keeps failing does not hold back newer
+    ones. An expired variant is served by no endpoint (no URL) even before the sweep removes it. A retried job
+    (after a crash) may leave the variants of the failed attempt behind; they count against the 512 MiB cap
+    until they expire with the TTL like the rest. Deleting an experiment from the history does not delete its
+    variants; they also expire.
   - Progress is `{ done, total }` under `op:{id}:progress` in Redis (TTL 10 min, refreshed after every
     variant) and only shown while the operation is queued or running. If Redis fails, the job goes on
     without reporting.

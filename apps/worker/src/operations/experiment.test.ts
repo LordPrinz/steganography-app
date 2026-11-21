@@ -73,6 +73,7 @@ function fixture() {
       status: "running",
       attempts: 1,
       error: null,
+      failure_layer: null,
       run_after: new Date(),
       locked_at: new Date(),
       finished_at: null,
@@ -89,14 +90,14 @@ function fixture() {
   }
 
   function context(
-    message: string | null = SECRET,
+    message: string | string[] | null = SECRET,
     signal = new AbortController().signal,
   ): JobContext {
     return {
       signal,
-      message: async () => {
+      messages: async () => {
         if (message === null) throw new JobError("message_expired");
-        return message;
+        return Array.isArray(message) ? message : [message];
       },
       reveal: async () => {},
     };
@@ -186,6 +187,64 @@ describe("experiment handler", () => {
     expect(result.methods[0]?.ecc).toBe("repetition");
   });
 
+  describe("layered mode", () => {
+    const layered: ExperimentParams = {
+      mode: "layered",
+      methods: [
+        MethodSelection.parse({ id: "lsb" }),
+        MethodSelection.parse({ id: "dwt-qim", params: { level: 2, step: 64 } }),
+        MethodSelection.parse({ id: "dct-koch-zhao" }),
+      ],
+      scenarios: [[], [{ type: "jpeg", quality: 50 }], [{ type: "blur", sigma: 1 }]],
+    };
+    const messages = ["m-lsb", "m-dwt-longer", "m-dct"];
+
+    test("hides every layer once and reports each layer per scenario, one image per scenario", async () => {
+      const f = fixture();
+      const source = await f.addImage();
+      const result = (await createExperimentHandler({ ...f, log: silent })(
+        f.job(source.id, layered),
+        f.context(messages),
+      )) as ExperimentResult;
+
+      expect(result.mode).toBe("layered");
+      expect(result.messageBytes).toBe(messages.join("").length);
+      expect(result.methods.map((m) => m.method)).toEqual(["lsb", "dwt-qim", "dct-koch-zhao"]);
+      // PSNR, SSIM and time are those of the whole image.
+      expect(new Set(result.methods.map((m) => m.stegoPsnr)).size).toBe(1);
+      expect(result.variants).toHaveLength(9);
+      expect(result.aggregates).toHaveLength(9);
+
+      const clean = result.variants.filter((v) => v.label === "none");
+      expect(clean.map((v) => v.success)).toEqual([true, true, true]);
+      const jpeg = result.variants.filter((v) => v.label === "jpeg50");
+      expect(jpeg.find((v) => v.method === "lsb")?.success).toBe(false);
+
+      const ids = new Set(result.variants.map((v) => v.imageId));
+      expect(ids.size).toBe(3);
+      for (const label of ["none", "jpeg50", "blur1"]) {
+        const shared = new Set(
+          result.variants.filter((v) => v.label === label).map((v) => v.imageId),
+        );
+        expect(shared.size).toBe(1);
+      }
+      expect(f.reports.at(-1)).toEqual({ done: 9, total: 9 });
+      expect(await f.images.listExpired(new Date(Date.now() + 1e9), 100)).toHaveLength(3);
+      for (const message of messages) expect(JSON.stringify(result)).not.toContain(message);
+    });
+
+    test("names the layer that does not fit, and rejects a wrong number of messages", async () => {
+      const f = fixture();
+      const source = await f.addImage(natural(32, 32));
+      const handler = createExperimentHandler({ ...f, log: silent });
+      const failed = await handler(f.job(source.id, layered), f.context(messages)).catch((e) => e);
+      expect(failed).toMatchObject({ code: "capacity_exceeded", layer: 2 });
+      expect(await code(handler(f.job(source.id, layered), f.context("only one")))).toBe(
+        "invalid_params",
+      );
+    });
+  });
+
   test("reports progress from 0 to the total", async () => {
     const f = fixture();
     const source = await f.addImage();
@@ -239,9 +298,12 @@ describe("experiment handler", () => {
     expect(await code(handler(f.job(null, modeA), f.context()))).toBe("source_missing");
     expect(await code(handler(f.job(big.id, modeA), f.context()))).toBe("image_too_large");
     expect(await code(handler(f.job(tiny.id, modeA), f.context()))).toBe("image_too_small");
-    expect(await code(handler(f.job(small.id, modeA), f.context("x".repeat(100))))).toBe(
-      "capacity_exceeded",
+    // Mode A hides one message with one method: the failure names no layer.
+    const failed = await handler(f.job(small.id, modeA), f.context("x".repeat(100))).catch(
+      (e) => e,
     );
+    expect(failed).toMatchObject({ code: "capacity_exceeded" });
+    expect(failed.layer).toBeUndefined();
   });
 
   test("stops and writes nothing more once aborted", async () => {

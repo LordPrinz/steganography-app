@@ -14,6 +14,7 @@ function fakeJob(id: string, type: OperationType = "encode"): ClaimedJob {
     status: "running",
     attempts: 1,
     error: null,
+    failure_layer: null,
     run_after: new Date(),
     locked_at: new Date(),
     finished_at: null,
@@ -324,6 +325,30 @@ describe("worker", () => {
     expect(queue.complete).not.toHaveBeenCalled();
   });
 
+  test.each([
+    ["layer_conflict", 2],
+    ["capacity_exceeded", 1],
+    ["image_too_small", undefined],
+  ])("a %s failure is final on the first attempt and passes its layer on", async (code, layer) => {
+    const queue = fakeQueue([fakeJob("a")]);
+    const worker = createWorker({
+      handoff,
+      queue,
+      log: silent,
+      handlers: {
+        encode: async () => {
+          worker.stop();
+          throw new JobError(code, { layer });
+        },
+      },
+    });
+    await worker.run();
+    const [, error, options] = queue.fail.mock.calls[0] ?? [];
+    expect(error).toBeInstanceOf(JobError);
+    expect(error).toMatchObject({ code, layer });
+    expect(options).toEqual({ retry: false });
+  });
+
   test("renews the lease while a job runs and aborts it once the lease is lost", async () => {
     const queue = fakeQueue([fakeJob("a")]);
     queue.extend.mockImplementation(async () => queue.extend.mock.calls.length < 3);
@@ -430,20 +455,20 @@ describe("worker", () => {
 
     test("the handler reads the message and it is deleted once the job succeeds", async () => {
       const store = createMemoryStore();
-      await store.set("op:op-a:message", "hello", 60_000);
-      let seen: string | undefined;
+      await store.set("op:op-a:message", '["hello"]', 60_000);
+      let seen: string[] | undefined;
       const queue = fakeQueue([fakeJob("a")]);
       const { done } = run({
         queue,
         store,
         handler: async (_job, context) => {
-          seen = await context.message();
-          expect(await store.get("op:op-a:message")).toBe("hello");
+          seen = await context.messages();
+          expect(await store.get("op:op-a:message")).toBe('["hello"]');
           return { ok: true };
         },
       });
       await done;
-      expect(seen).toBe("hello");
+      expect(seen).toEqual(["hello"]);
       expect(await store.get("op:op-a:message")).toBeNull();
     });
 
@@ -451,7 +476,7 @@ describe("worker", () => {
       const queue = fakeQueue([fakeJob("a")]);
       const { done } = run({
         queue,
-        handler: (_job, context) => context.message().then(() => ({})),
+        handler: (_job, context) => context.messages().then(() => ({})),
       });
       await done;
       const [, error, options] = queue.fail.mock.calls[0] ?? [];
@@ -461,14 +486,14 @@ describe("worker", () => {
 
     test("a retryable failure keeps the message, the last attempt deletes it", async () => {
       const store = createMemoryStore();
-      await store.set("op:op-a:message", "hello", 60_000);
+      await store.set("op:op-a:message", '["hello"]', 60_000);
       const failing: JobHandler = async () => {
         throw new Error("transient");
       };
 
       const first = fakeQueue([fakeJob("a")]);
       await run({ queue: first, store, handler: failing }).done;
-      expect(await store.get("op:op-a:message")).toBe("hello");
+      expect(await store.get("op:op-a:message")).toBe('["hello"]');
 
       const last = fakeQueue([{ ...fakeJob("a"), attempts: 3 }]);
       await run({ queue: last, store, handler: failing }).done;
@@ -477,11 +502,11 @@ describe("worker", () => {
 
     test("a job that lost its lease leaves the message to the new owner", async () => {
       const store = createMemoryStore();
-      await store.set("op:op-a:message", "hello", 60_000);
+      await store.set("op:op-a:message", '["hello"]', 60_000);
       const queue = fakeQueue([fakeJob("a")]);
       queue.complete.mockImplementation(async () => false);
       await run({ queue, store, handler: async () => null }).done;
-      expect(await store.get("op:op-a:message")).toBe("hello");
+      expect(await store.get("op:op-a:message")).toBe('["hello"]');
     });
 
     test("reveal stores the decoded message under op:{id}:revealed", async () => {
@@ -489,12 +514,14 @@ describe("worker", () => {
       const { store, done } = run({
         queue,
         handler: async (_job, context) => {
-          await context.reveal("decoded");
+          await context.reveal({ lsb: "decoded" });
           return { ok: true };
         },
       });
       await done;
-      expect(await store.get("op:op-a:revealed")).toBe("decoded");
+      expect(JSON.parse((await store.get("op:op-a:revealed")) as string)).toEqual({
+        lsb: "decoded",
+      });
     });
 
     test("a failing delete is logged and does not fail the job", async () => {

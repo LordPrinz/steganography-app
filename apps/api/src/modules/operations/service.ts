@@ -2,6 +2,7 @@ import {
   AUTO_SELECTIONS,
   DEFAULT_SCENARIOS,
   type DecodeRequest,
+  type EncodeParams,
   type EncodeRequest,
   EXPERIMENT_MAX_PIXELS,
   EXPERIMENT_MIN_SIDE,
@@ -21,6 +22,7 @@ import {
   OperationResultSummary,
   OperationSummary,
   OperationType,
+  StegoMethod,
 } from "@stego/contracts";
 import type {
   ImageRepository,
@@ -29,7 +31,7 @@ import type {
   OperationRepository,
   OperationView,
 } from "@stego/db";
-import { capacity, createMethod, MAX_MESSAGE_BYTES } from "@stego/engine";
+import { capacityLayered, createMethod, MAX_MESSAGE_BYTES } from "@stego/engine";
 import type { KeyValueStore, MessageHandoff, ProgressStore, WakePublisher } from "@stego/kv";
 import { z } from "zod";
 import { encodeCursor } from "../../lib/cursor.ts";
@@ -54,6 +56,8 @@ export class MessageTooLargeError extends Error {
     readonly available: number,
     /** The method that does not hold it, when a request involves several (an experiment). */
     readonly method?: MethodSelection["id"],
+    /** Index of the layer in the request, for an encode or a layered experiment. */
+    readonly layer?: number,
   ) {
     super("Message does not fit in the image");
   }
@@ -133,7 +137,7 @@ export interface OperationServiceDeps {
   images: Pick<ImageRepository, "findOwned">;
   /** Presigns the result image after checking the user owns it. */
   imageUrls: Pick<ImageService, "get">;
-  handoff: Pick<MessageHandoff, "putMessage" | "deleteMessage" | "getRevealed" | "deleteRevealed">;
+  handoff: Pick<MessageHandoff, "putMessages" | "deleteMessage" | "getRevealed" | "deleteRevealed">;
   /** Told after each new job committed, so an idle worker picks it up without waiting for its poll. */
   wake: WakePublisher;
   /** Caches finished operations for polling. */
@@ -153,6 +157,9 @@ const DEFAULT_CACHE_TTL_MS = 10 * 60_000;
 /** What a finished operation shows apart from the parts that must stay fresh: URL and revealed message. */
 const CachedOperation = OperationSummary.extend({ userId: z.string() });
 type CachedOperation = z.infer<typeof CachedOperation>;
+
+/** What a decode revealed, by method; anything else in the entry is dropped. */
+const Revealed = z.partialRecord(StegoMethod, z.string());
 
 const cacheKey = (id: string) => `op:${id}:view`;
 
@@ -176,6 +183,7 @@ function baseSummary(row: OperationView): Omit<OperationSummary, "result"> {
     params: row.params,
     // Only a failed job's code is a result; a retrying job still carries its last attempt's code.
     error: row.status === "failed" ? row.error : null,
+    failedLayer: row.status === "failed" ? row.failure_layer : null,
     createdAt: row.created_at.toISOString(),
   };
 }
@@ -218,16 +226,36 @@ export function createOperationService({
     return image;
   }
 
+  /**
+   * Each message must fit its own method's capacity (layers do not share bit positions, ADR 9). Throws
+   * `MessageTooLargeError` for the first that does not; `indexed` adds its index in the request.
+   */
+  function checkLayerCapacity(
+    image: { width: number; height: number },
+    layers: readonly { method: MethodSelection; message: string }[],
+    indexed: boolean,
+  ) {
+    const built = layers.map(({ method }) => buildMethod(method));
+    const available = capacityLayered(image.width, image.height, built);
+    layers.forEach(({ method, message }, index) => {
+      const needed = new TextEncoder().encode(message).byteLength;
+      const limit = Math.min(available[index] as number, MAX_MESSAGE_BYTES);
+      if (needed > limit) {
+        throw new MessageTooLargeError(needed, limit, method.id, indexed ? index : undefined);
+      }
+    });
+  }
+
   // The message goes to Redis first, so a worker that claims the job right away finds it. If the
   // operation is not created after all, the message is dropped at once instead of waiting for its TTL.
   async function enqueue(
     operation: Omit<NewOperation, "id">,
-    message?: string,
+    messages?: readonly string[],
   ): Promise<OperationAccepted> {
     const id = crypto.randomUUID();
-    if (message !== undefined) await handoff.putMessage(id, message);
+    if (messages !== undefined) await handoff.putMessages(id, messages);
     const discard = () =>
-      message === undefined
+      messages === undefined
         ? Promise.resolve()
         : handoff.deleteMessage(id).catch((error) => {
             log.error("Could not drop the message of an operation that was not created", error);
@@ -288,9 +316,10 @@ export function createOperationService({
     }
   }
 
-  async function readRevealed(id: string): Promise<string | null> {
+  async function readRevealed(id: string) {
     try {
-      return await handoff.getRevealed(id);
+      const revealed = await handoff.getRevealed(id);
+      return revealed && (Revealed.safeParse(revealed).data ?? null);
     } catch (error) {
       log.error("Could not read a revealed message", error);
       return null;
@@ -298,31 +327,33 @@ export function createOperationService({
   }
 
   return {
-    async encode(userId, { imageId, message, layers: [selection] }) {
+    async encode(userId, { imageId, layers }) {
       const image = await ownedImage(userId, imageId);
-      const method = buildMethod(selection);
-      const needed = new TextEncoder().encode(message).byteLength;
-      const available = Math.min(capacity(image.width, image.height, method), MAX_MESSAGE_BYTES);
-      if (needed > available) throw new MessageTooLargeError(needed, available);
+      const selections = layers.map(({ method }) => method);
+      checkLayerCapacity(image, layers, true);
+      const params: EncodeParams = { layers: selections };
       return enqueue(
         {
           userId,
           type: "encode",
-          method: selection.id,
+          // One layer names its method; several have no single one and show as "auto" in the history.
+          method: selections.length === 1 ? (selections[0]?.id ?? null) : null,
           sourceImageId: image.id,
-          params: { layers: [selection] },
+          params,
         },
-        message,
+        layers.map(({ message }) => message),
       );
     },
 
     async decode(userId, { imageId, method }) {
       const image = await ownedImage(userId, imageId, { allowVariant: true });
-      if (method !== "auto") buildMethod(method);
+      const selections = method === "auto" ? [] : Array.isArray(method) ? method : [method];
+      for (const selection of selections) buildMethod(selection);
       return enqueue({
         userId,
         type: "decode",
-        method: method === "auto" ? null : method.id,
+        // Several methods (a layered decode) have no single one and show as "auto", like a layered encode.
+        method: selections.length === 1 ? (selections[0]?.id ?? null) : null,
         sourceImageId: image.id,
         params: { method },
       });
@@ -337,16 +368,28 @@ export function createOperationService({
       if (pixels > EXPERIMENT_MAX_PIXELS) {
         throw new ExperimentImageTooLargeError(pixels, EXPERIMENT_MAX_PIXELS);
       }
-      const methods = request.mode === "A" ? AUTO_SELECTIONS : [request.method];
+      const methods =
+        request.mode === "A"
+          ? AUTO_SELECTIONS
+          : request.mode === "B"
+            ? [request.method]
+            : request.layers.map(({ method }) => method);
       const scenarios = request.mode === "A" ? DEFAULT_SCENARIOS : request.scenarios;
       const variants = methods.length * scenarios.length;
       if (variants > maxVariants) throw new TooManyVariantsError(variants, maxVariants);
-      const needed = new TextEncoder().encode(request.message).byteLength;
-      for (const selection of methods) {
-        const method = buildMethod(selection);
-        const available = Math.min(capacity(image.width, image.height, method), MAX_MESSAGE_BYTES);
-        if (needed > available) throw new MessageTooLargeError(needed, available, selection.id);
-      }
+      // Modes A and B hide one message with each method; layered hides one message per layer.
+      const messages =
+        request.mode === "layered"
+          ? request.layers.map(({ message }) => message)
+          : [request.message];
+      checkLayerCapacity(
+        image,
+        methods.map((method, index) => ({
+          method,
+          message: messages[request.mode === "layered" ? index : 0] as string,
+        })),
+        request.mode === "layered",
+      );
       // Expanded here, so the queued job does not change when the defaults do.
       const params: ExperimentParams = {
         mode: request.mode,
@@ -357,11 +400,11 @@ export function createOperationService({
         {
           userId,
           type: "experiment",
-          method: request.mode === "B" ? request.method.id : null,
+          method: methods.length === 1 && request.mode !== "A" ? (methods[0]?.id ?? null) : null,
           sourceImageId: image.id,
           params,
         },
-        request.message,
+        messages,
       );
     },
 

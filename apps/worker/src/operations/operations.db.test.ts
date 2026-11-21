@@ -1,5 +1,11 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { Experiment, ImagePage, Operation, OperationAccepted } from "@stego/contracts";
+import {
+  type EncodeResult,
+  Experiment,
+  ImagePage,
+  Operation,
+  OperationAccepted,
+} from "@stego/contracts";
 import {
   createImageRepository,
   createJobQueue,
@@ -194,7 +200,7 @@ describe.skipIf(!sql).each(kvBackends)(
         finished,
         handoff: createMessageHandoff(kv),
         encode: (layer: object, message = SECRET) =>
-          run("/operations/encode", { imageId: upload.id, message, layers: [layer] }),
+          run("/operations/encode", { imageId: upload.id, layers: [{ method: layer, message }] }),
         decode: (imageId: string, method: unknown) =>
           run("/operations/decode", { imageId, method }),
       };
@@ -212,20 +218,20 @@ describe.skipIf(!sql).each(kvBackends)(
       });
       expect(encoded.result).toMatchObject({
         kind: "encode",
-        messageBytes: new TextEncoder().encode(SECRET).length,
+        layers: [{ method: layer.id, messageBytes: new TextEncoder().encode(SECRET).length }],
       });
       const stego = encoded.resultImage;
       expect(stego).toMatchObject({ kind: "stego", width: 256, height: 256 });
       expect(stego?.id).not.toBe(upload.id);
-      expect(await handoff.getMessage(encoded.id)).toBeNull();
+      expect(await handoff.getMessages(encoded.id)).toBeNull();
 
       const decoded = await decode((stego as NonNullable<typeof stego>).id, layer);
-      expect(decoded).toMatchObject({ status: "succeeded", revealed: SECRET });
+      expect(decoded).toMatchObject({ status: "succeeded", revealed: { [layer.id]: SECRET } });
       expect(decoded.result).toMatchObject({ kind: "decode", detected: layer.id });
 
       if (auto) {
         const detected = await decode((stego as NonNullable<typeof stego>).id, "auto");
-        expect(detected).toMatchObject({ status: "succeeded", revealed: SECRET });
+        expect(detected).toMatchObject({ status: "succeeded", revealed: { [layer.id]: SECRET } });
         expect(detected.result).toMatchObject({ kind: "decode", detected: layer.id });
       }
 
@@ -242,6 +248,89 @@ describe.skipIf(!sql).each(kvBackends)(
       }
       expectNoSecretLogged();
     });
+
+    test.skipIf(!enabled)(
+      "three layers round-trip: encode hides all, decode reveals each message by method",
+      async () => {
+        const { db, ann, upload, finished, decode, handoff, server } = await start();
+        const messages = {
+          lsb: `${SECRET}-lsb`,
+          "dct-koch-zhao": `${SECRET}-dct`,
+          "dwt-qim": `${SECRET}-dwt`,
+        };
+        const res = await ann.postJson("/operations/encode", {
+          imageId: upload.id,
+          // Not in embedding order: the engine decides that.
+          layers: [
+            { method: { id: "lsb" }, message: messages.lsb },
+            { method: { id: "dwt-qim" }, message: messages["dwt-qim"] },
+            { method: { id: "dct-koch-zhao" }, message: messages["dct-koch-zhao"] },
+          ],
+        });
+        expect(res.status).toBe(202);
+        const encoded = await finished(ann, OperationAccepted.parse(await res.json()).id);
+        expect(encoded).toMatchObject({ type: "encode", status: "succeeded", method: "auto" });
+        const result = encoded.result as EncodeResult;
+        expect(result.layers.map((l) => l.method)).toEqual(["lsb", "dwt-qim", "dct-koch-zhao"]);
+        expect(result.layers.every((l) => l.capacityBytes > l.messageBytes)).toBe(true);
+        expect(result.psnr).toBeGreaterThan(25);
+        expect(await handoff.getMessages(encoded.id)).toBeNull();
+
+        const stego = (encoded.resultImage as NonNullable<typeof encoded.resultImage>).id;
+        const auto = await decode(stego, "auto");
+        expect(auto).toMatchObject({ status: "succeeded", revealed: messages });
+        expect(auto.result).toMatchObject({ kind: "decode", found: expect.any(Array) });
+        const one = await decode(stego, { id: "dwt-qim" });
+        expect(one.revealed).toEqual({ "dwt-qim": messages["dwt-qim"] });
+
+        // The history lists the layered encode under "auto"; nobody else can read any of it.
+        const bob = new Client(server.url, "bob@example.com");
+        await bob.signIn();
+        expect((await bob.request("GET", `/operations/${encoded.id}`)).status).toBe(404);
+        expect((await bob.request("GET", `/operations/${auto.id}`)).status).toBe(404);
+
+        const rows = await db<{ row: string }[]>`
+          SELECT to_jsonb(o)::text AS row FROM operations o
+          UNION ALL SELECT to_jsonb(j)::text FROM jobs j
+          UNION ALL SELECT to_jsonb(i)::text FROM images i
+        `;
+        for (const message of Object.values(messages)) {
+          for (const { row } of rows) expect(row).not.toContain(message);
+          const output = logged
+            .map((args) => args.map((arg) => Bun.inspect(arg)).join(" "))
+            .join("\n");
+          expect(output).not.toContain(message);
+        }
+      },
+    );
+
+    test.skipIf(!enabled)(
+      "a decode with a list of methods reveals layers that need their own parameters or a code",
+      async () => {
+        const { ann, upload, finished, decode } = await start();
+        const layers = [
+          { method: { id: "lsb" }, message: "plain" },
+          { method: { id: "dwt-qim", params: { level: 2, step: 64 } }, message: "wavelet" },
+          { method: { id: "dct-koch-zhao", ecc: { code: "hamming74" } }, message: "cosine" },
+        ];
+        const res = await ann.postJson("/operations/encode", { imageId: upload.id, layers });
+        const encoded = await finished(ann, OperationAccepted.parse(await res.json()).id);
+        expect(encoded.status).toBe("succeeded");
+        const stego = (encoded.resultImage as NonNullable<typeof encoded.resultImage>).id;
+
+        const auto = await decode(stego, "auto");
+        expect(auto.revealed).toEqual({ lsb: "plain" });
+        const listed = await decode(
+          stego,
+          layers.map(({ method }) => method),
+        );
+        expect(listed).toMatchObject({
+          status: "succeeded",
+          method: "auto",
+          revealed: { lsb: "plain", "dwt-qim": "wavelet", "dct-koch-zhao": "cosine" },
+        });
+      },
+    );
 
     test.skipIf(!enabled)("auto finds no message in an image that holds none", async () => {
       const { upload, decode } = await start();
@@ -267,7 +356,7 @@ describe.skipIf(!sql).each(kvBackends)(
         resultImage: null,
         result: null,
       });
-      expect(await handoff.getMessage(failed.id)).toBeNull();
+      expect(await handoff.getMessages(failed.id)).toBeNull();
       const [job] = await db<
         { attempts: number }[]
       >`SELECT attempts FROM jobs WHERE operation_id = ${failed.id}`;
@@ -355,7 +444,7 @@ describe.skipIf(!sql).each(kvBackends)(
     test.skipIf(!enabled)("other users cannot read an operation or its message", async () => {
       const { server, ann, upload, decode, handoff } = await start();
       const op = await decode(upload.id, "auto");
-      await handoff.putRevealed(op.id, SECRET);
+      await handoff.putRevealed(op.id, { lsb: SECRET });
       expect(await (await ann.request("GET", `/operations/${op.id}`)).text()).toContain(SECRET);
 
       const bob = new Client(server.url, "bob@example.com");

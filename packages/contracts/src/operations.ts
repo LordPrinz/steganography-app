@@ -3,7 +3,7 @@ import { ExperimentProgress, ExperimentResult, ExperimentResultSummary } from ".
 import { ImageDetail, MAX_PAGE_SIZE } from "./images.ts";
 import { JobStatus } from "./jobs.ts";
 import { StegoMethod } from "./methods.ts";
-import { MethodSelection } from "./selections.ts";
+import { LayerList, MAX_LAYERS, MethodSelection, MethodSelectionList } from "./selections.ts";
 
 /** Operations a user may have queued or running at once. */
 export const MAX_ACTIVE_OPERATIONS_PER_USER = 5;
@@ -14,31 +14,45 @@ export const MAX_ACTIVE_OPERATIONS_PER_USER = 5;
  */
 export const EncodeRequest = z.strictObject({
   imageId: z.uuid(),
-  message: z.string().min(1),
-  /** One layer until layered embedding exists. */
-  layers: z.tuple([MethodSelection]),
+  /** One message per layer, each with its own method; the engine fixes the embedding order. */
+  layers: LayerList,
 });
 export type EncodeRequest = z.infer<typeof EncodeRequest>;
 
 export const DecodeRequest = z.strictObject({
   imageId: z.uuid(),
-  method: z.union([z.literal("auto"), MethodSelection]),
+  /**
+   * `"auto"` tries every method with its defaults and no code. A method, or a list of up to 3 with
+   * different ids, tries exactly those (a layer with other parameters or a code needs its own
+   * selection). Every layer found is revealed.
+   */
+  method: z.union([z.literal("auto"), MethodSelection, MethodSelectionList]),
 });
 export type DecodeRequest = z.infer<typeof DecodeRequest>;
 
-/** What the encode job reads from `operations.params`; the message is never part of it. */
-export const EncodeParams = EncodeRequest.pick({ layers: true });
+/** What the encode job reads from `operations.params`: the layers' methods in request order, no messages. */
+export const EncodeParams = z.object({ layers: z.array(MethodSelection).min(1).max(MAX_LAYERS) });
+export type EncodeParams = z.infer<typeof EncodeParams>;
 export const DecodeParams = DecodeRequest.pick({ method: true });
 
 export const OperationType = z.enum(["encode", "decode", "experiment"]);
 export type OperationType = z.infer<typeof OperationType>;
 
-export const EncodeResult = z.object({
-  kind: z.literal("encode"),
+export const EncodeLayerResult = z.object({
+  method: StegoMethod,
   messageBytes: z.number().int().nonnegative(),
   capacityBytes: z.number().int().nonnegative(),
-  /** dB; null when the stego image is identical to the source (PSNR is infinite). */
+});
+export type EncodeLayerResult = z.infer<typeof EncodeLayerResult>;
+
+export const EncodeResult = z.object({
+  kind: z.literal("encode"),
+  /** In request order. */
+  layers: z.array(EncodeLayerResult).min(1),
+  /** Of the whole image with every layer: dB; null when it equals the source (PSNR is infinite). */
   psnr: z.number().nullable(),
+  /** Null when a side is under 11 pixels, where SSIM is undefined. */
+  ssim: z.number().nullable(),
   encodeMs: z.number().nonnegative(),
 });
 export type EncodeResult = z.infer<typeof EncodeResult>;
@@ -63,6 +77,8 @@ export const DecodeResult = z.object({
   attempts: z.array(DecodeAttempt),
   /** The first method that found a message. */
   detected: StegoMethod.nullable(),
+  /** Every method that found a message, in the order tried. */
+  found: z.array(StegoMethod).default([]),
 });
 export type DecodeResult = z.infer<typeof DecodeResult>;
 
@@ -101,6 +117,9 @@ export const OperationSummary = z.object({
   result: OperationResult.nullable(),
   /** Short public code of a failed job (e.g. `message_expired`). */
   error: z.string().nullable(),
+  /** For a failed layered job, the index in the request of the layer it stopped on. */
+  // The default keeps cache entries written before this field existed parsing.
+  failedLayer: z.int().min(0).max(2).nullable().default(null),
   createdAt: z.iso.datetime(),
 });
 export type OperationSummary = z.infer<typeof OperationSummary>;
@@ -133,8 +152,8 @@ export type OperationPage = z.infer<typeof OperationPage>;
 export const Operation = OperationSummary.omit({ resultImageId: true }).extend({
   /** The stego image of a finished encode, with a fresh presigned URL. */
   resultImage: ImageDetail.nullable(),
-  /** The decoded message while its short-lived key exists, null afterwards. Never stored in Postgres. */
-  revealed: z.string().nullable(),
+  /** The decoded messages by method while their short-lived key exists, null afterwards. Never stored in Postgres. */
+  revealed: z.partialRecord(StegoMethod, z.string()).nullable(),
 });
 export type Operation = z.infer<typeof Operation>;
 

@@ -91,8 +91,7 @@ describe.each(backends)("operations history API (%s)", (name, backend) => {
     async function encode(c: Client, createdAt?: string, status = "succeeded", method = lsb) {
       const res = await c.postJson("/operations/encode", {
         imageId: image.id,
-        message: SECRET,
-        layers: [method],
+        layers: [{ method, message: SECRET }],
       });
       expect(res.status).toBe(202);
       const { id } = OperationAccepted.parse(await res.json());
@@ -271,7 +270,7 @@ describe.each(backends)("operations history API (%s)", (name, backend) => {
       const { deps, ann, encode, decode } = await start();
       await encode(ann, at(1));
       const decoded = await decode(ann, "auto", at(2));
-      await createMessageHandoff(deps.kv).putRevealed(decoded, SECRET);
+      await createMessageHandoff(deps.kv).putRevealed(decoded, { lsb: SECRET });
       const res = await ann.request("GET", "/operations");
       expect(res.headers.get("cache-control")).toBe("no-store");
       const text = await res.text();

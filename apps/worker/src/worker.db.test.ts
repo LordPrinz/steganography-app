@@ -70,7 +70,7 @@ describe.skipIf(!sql)("worker against Postgres", () => {
     }
 
     const delivered = await enqueue();
-    await handoff.putMessage(delivered, secret);
+    await handoff.putMessages(delivered, [secret]);
     const expired = await enqueue();
     const seen: string[] = [];
     const worker = createWorker({
@@ -80,7 +80,7 @@ describe.skipIf(!sql)("worker against Postgres", () => {
       pollIntervalMs: 5,
       handlers: {
         encode: async (_job, context) => {
-          seen.push(await context.message());
+          seen.push(...(await context.messages()));
           return { embedded: true };
         },
       },
@@ -110,6 +110,6 @@ describe.skipIf(!sql)("worker against Postgres", () => {
       SELECT status, error, attempts FROM jobs WHERE operation_id = ${expired}
     `;
     expect(failed).toEqual({ status: "failed", error: "message_expired", attempts: 1 });
-    expect(await handoff.getMessage(delivered)).toBeNull();
+    expect(await handoff.getMessages(delivered)).toBeNull();
   });
 });

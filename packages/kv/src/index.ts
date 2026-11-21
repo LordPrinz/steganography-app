@@ -1,8 +1,10 @@
 export {
   createMessageHandoff,
+  MAX_HANDOFF_MESSAGES,
   MESSAGE_TTL_MS,
   type MessageHandoff,
   REVEALED_TTL_MS,
+  type RevealedMessages,
 } from "./handoff.ts";
 export { createMemoryStore } from "./memory.ts";
 export {

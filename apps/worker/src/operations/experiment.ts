@@ -11,20 +11,19 @@ import {
 } from "@stego/contracts";
 import { type ImageRepository, JobError } from "@stego/db";
 import {
-  CapacityExceededError,
-  capacity,
-  createMethod,
-  hide,
+  type ConfiguredMethod,
+  capacityLayered,
   MAX_MESSAGE_BYTES,
   measure,
   psnr,
   ssim,
 } from "@stego/engine";
-import { applyScenario, encodePng, type RgbaImage } from "@stego/image-io";
+import { applyScenario, encodePng } from "@stego/image-io";
 import type { ProgressStore } from "@stego/kv";
 import { newImageKey, type ObjectStore } from "@stego/storage";
 import type { JobHandler } from "../handlers.ts";
 import { aggregateVariants } from "./aggregate.ts";
+import { buildMethods, hideAll } from "./layers.ts";
 import { loadSource } from "./source.ts";
 
 /** How long an attacked image stays available after the experiment. */
@@ -105,81 +104,105 @@ export function createExperimentHandler({
     const params = ExperimentParams.safeParse(operation.params);
     if (!params.success) throw new JobError("invalid_params");
     const { mode, methods: selections, scenarios } = params.data;
-    const methods = selections.map((selection) => {
-      try {
-        return { selection, method: createMethod(selection) };
-      } catch (error) {
-        if (error instanceof RangeError) throw new JobError("invalid_params", { cause: error });
-        throw error;
-      }
-    });
+    const built = buildMethods(selections);
 
-    const message = await context.message();
+    const messages = await context.messages();
+    // Modes A and B hide the one message with each method; layered hides one message per layer.
+    if (messages.length !== (mode === "layered" ? built.length : 1)) {
+      throw new JobError("invalid_params");
+    }
     const cover = await loadSource({ images, storage }, operation);
     if (cover.width * cover.height > EXPERIMENT_MAX_PIXELS) throw new JobError("image_too_large");
     if (Math.min(cover.width, cover.height) < EXPERIMENT_MIN_SIDE)
       throw new JobError("image_too_small");
 
-    const total = methods.length * scenarios.length;
+    // Each group is embedded once and attacked per scenario: one method for A and B, all layers together
+    // for layered.
+    const layers = selections.map((selection, index) => ({
+      selection,
+      method: built[index] as ConfiguredMethod,
+      message: messages[mode === "layered" ? index : 0] as string,
+    }));
+    const groups = mode === "layered" ? [layers] : layers.map((layer) => [layer]);
+
+    const total = layers.length * scenarios.length;
     let done = 0;
     await report(operation.id, done, total);
 
     const summaries: ExperimentMethodSummary[] = [];
     const variants: ExperimentVariant[] = [];
-    for (const { selection, method } of methods) {
+    for (const group of groups) {
       context.signal.throwIfAborted();
-      const ecc = selection.ecc?.code ?? null;
       const embedStarted = performance.now();
-      let stego: RgbaImage;
-      try {
-        stego = hide(cover, message, method);
-      } catch (error) {
-        if (error instanceof CapacityExceededError) throw new JobError("capacity_exceeded");
-        throw error;
-      }
-      summaries.push({
-        method: selection.id,
-        ecc,
-        capacityBytes: Math.min(capacity(cover.width, cover.height, method), MAX_MESSAGE_BYTES),
+      const stego = hideAll(
+        cover,
+        group.map(({ method }) => method),
+        group.map(({ message }) => message),
+        // Modes A and B hide one message with one method: there is no layer to name.
+        { reportLayer: mode === "layered" },
+      );
+      const wholeImage = {
         stegoPsnr: finiteOrNull(psnr(cover, stego)),
         stegoSsim: ssim(cover, stego),
         encodeMs: Math.round(performance.now() - embedStarted),
+      };
+      const capacities = capacityLayered(
+        cover.width,
+        cover.height,
+        group.map(({ method }) => method),
+      );
+      group.forEach(({ selection }, index) => {
+        summaries.push({
+          method: selection.id,
+          ecc: selection.ecc?.code ?? null,
+          capacityBytes: Math.min(capacities[index] as number, MAX_MESSAGE_BYTES),
+          ...wholeImage,
+        });
       });
 
       for (const scenario of scenarios) {
         // Nothing is written once the job was aborted: the worker has moved on.
         context.signal.throwIfAborted();
-        const started = performance.now();
+        const attackStarted = performance.now();
         const attacked = await applyScenario(stego, scenario);
-        const measured = measure(attacked, message, method);
-        const timeMs = Math.round(performance.now() - started);
+        const attackMs = performance.now() - attackStarted;
         const png = await encodePng(attacked);
         context.signal.throwIfAborted();
+        // One stored image per scenario, shared by every layer.
         const imageId =
           png.byteLength > MAX_PNG_BYTES
             ? null
             : await storeVariant(operation.user_id, attacked, png);
-        variants.push({
-          method: selection.id,
-          ecc,
-          scenario,
-          label: scenarioLabel(scenario),
-          success: measured.ok,
-          ber: measured.ber,
-          channelBer: measured.channelBer ?? null,
-          psnr: finiteOrNull(psnr(cover, attacked)),
-          ssim: ssim(cover, attacked),
-          timeMs,
-          imageId,
-        });
-        await report(operation.id, ++done, total);
+        const attackedPsnr = finiteOrNull(psnr(cover, attacked));
+        const attackedSsim = ssim(cover, attacked);
+        for (const { selection, method, message } of group) {
+          const measureStarted = performance.now();
+          const measured = measure(attacked, message, method);
+          variants.push({
+            method: selection.id,
+            ecc: selection.ecc?.code ?? null,
+            scenario,
+            label: scenarioLabel(scenario),
+            success: measured.ok,
+            ber: measured.ber,
+            channelBer: measured.channelBer ?? null,
+            psnr: attackedPsnr,
+            ssim: attackedSsim,
+            timeMs: Math.round(attackMs + performance.now() - measureStarted),
+            imageId,
+          });
+          await report(operation.id, ++done, total);
+        }
       }
     }
 
     const result: ExperimentResult = {
       kind: "experiment",
       mode,
-      messageBytes: new TextEncoder().encode(message).byteLength,
+      messageBytes: messages.reduce(
+        (sum, message) => sum + new TextEncoder().encode(message).byteLength,
+        0,
+      ),
       methods: summaries,
       variants,
       aggregates: aggregateVariants(variants),

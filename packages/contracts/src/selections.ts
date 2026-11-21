@@ -71,3 +71,38 @@ export type MethodSelection = z.output<typeof MethodSelection>;
 export const AUTO_SELECTIONS: readonly MethodSelection[] = StegoMethod.options.map((id) =>
   MethodSelection.parse({ id }),
 );
+
+/** Most messages hidden in one image: one per method. */
+export const MAX_LAYERS = 3;
+
+/** 1 to 3 methods with different ids, the ones a decode tries on a layered image. */
+export const MethodSelectionList = z
+  .array(MethodSelection)
+  .min(1)
+  .max(MAX_LAYERS)
+  .refine(
+    (methods) => new Set(methods.map(({ id }) => id)).size === methods.length,
+    "Each method may appear once",
+  );
+
+/** One layer of a layered embedding: the method (with its parameters) and the message it hides. */
+export const LayerRequest = z.strictObject({
+  method: MethodSelection,
+  message: z.string().min(1),
+});
+export type LayerRequest = z.infer<typeof LayerRequest>;
+
+/**
+ * 1 to 3 layers with different methods (a reveal could not tell two layers of one method apart; an
+ * error-correcting code does not change the method). The engine fixes the embedding order, so the list
+ * order only matters for reporting. No length cap on a message: capacity is checked against the image.
+ */
+export const LayerList = z
+  .array(LayerRequest)
+  .min(1)
+  .max(MAX_LAYERS)
+  .refine(
+    (layers) => new Set(layers.map(({ method }) => method.id)).size === layers.length,
+    "Each layer needs a different method",
+  );
+export type LayerList = z.infer<typeof LayerList>;

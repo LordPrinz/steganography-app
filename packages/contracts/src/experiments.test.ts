@@ -64,6 +64,35 @@ describe("experiment request", () => {
     });
   });
 
+  test("layered mode takes one to three layers with their own messages", () => {
+    const layer = (id: string, message = "hi") => ({ method: { id }, message });
+    const request = ExperimentRequest.parse({
+      mode: "layered",
+      imageId,
+      layers: [layer("dct-koch-zhao"), layer("lsb", "other")],
+      scenarios: [[], [{ type: "jpeg", quality: 60 }]],
+    });
+    expect(request.mode === "layered" && request.layers.map((l) => l.message)).toEqual([
+      "hi",
+      "other",
+    ]);
+    const base = { mode: "layered", imageId, scenarios: [[]] };
+    for (const layers of [
+      [],
+      [layer("lsb"), layer("lsb", "x")],
+      [layer("lsb"), layer("dwt-qim"), layer("dct-koch-zhao"), layer("lsb", "y")],
+      [{ method: { id: "lsb" } }],
+    ]) {
+      expect(ExperimentRequest.safeParse({ ...base, layers }).success).toBe(false);
+    }
+    expect(
+      ExperimentRequest.safeParse({ ...base, layers: [layer("lsb")], message: "hi" }).success,
+    ).toBe(false);
+    expect(
+      ExperimentRequest.safeParse({ ...base, layers: [layer("lsb")], scenarios: [] }).success,
+    ).toBe(false);
+  });
+
   test("rejects a bad mode, an empty message and bad scenario lists", () => {
     const base = { imageId, message: "hi", method: { id: "lsb" }, scenarios: [[]] };
     for (const body of [

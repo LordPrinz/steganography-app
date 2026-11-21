@@ -17,19 +17,24 @@ export interface DecodeDeps {
 }
 
 /**
- * Tries the chosen method, or every method with its defaults for "auto", and records what each one made
- * of the image. The first message found goes to the user through Redis; the result keeps only outcomes.
+ * Tries the chosen methods, or every method with its defaults for "auto", and records what each one made
+ * of the image. Every message found (one per layer of a layered image) goes to the user through Redis,
+ * by method; the result keeps only outcomes.
  */
 export function createDecodeHandler(deps: DecodeDeps): JobHandler {
   return async ({ operation }, context) => {
     const params = DecodeParams.safeParse(operation.params);
     if (!params.success) throw new JobError("invalid_params");
     const selections: readonly MethodSelection[] =
-      params.data.method === "auto" ? AUTO_SELECTIONS : [params.data.method];
+      params.data.method === "auto"
+        ? AUTO_SELECTIONS
+        : Array.isArray(params.data.method)
+          ? params.data.method
+          : [params.data.method];
 
     const source = await loadSource({ ...deps, allowVariant: true }, operation);
     const attempts: DecodeAttempt[] = [];
-    let found: string | null = null;
+    const found: Record<string, string> = {};
     for (const selection of selections) {
       context.signal.throwIfAborted();
       let method: ReturnType<typeof createMethod>;
@@ -62,15 +67,16 @@ export function createDecodeHandler(deps: DecodeDeps): JobHandler {
         capacityBytes: Math.min(capacity(source.width, source.height, method), MAX_MESSAGE_BYTES),
         decodeMs,
       });
-      if (revealed.ok && found === null) found = revealed.message;
+      if (revealed.ok) found[selection.id] = revealed.message;
     }
 
     context.signal.throwIfAborted();
-    if (found !== null) await context.reveal(found);
+    if (attempts.some(({ outcome }) => outcome === "found")) await context.reveal(found);
     const result: DecodeResult = {
       kind: "decode",
       attempts,
       detected: attempts.find(({ outcome }) => outcome === "found")?.method ?? null,
+      found: attempts.filter(({ outcome }) => outcome === "found").map(({ method }) => method),
     };
     return result;
   };

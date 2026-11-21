@@ -17,6 +17,8 @@ export interface NewOperation {
 /** An operation with the public error code of its job, set once the job failed. */
 export interface OperationView extends OperationRow {
   error: string | null;
+  /** The layer a failed layered job stopped on. */
+  failure_layer: number | null;
 }
 
 /** Narrows a listing; omitted fields match everything. `method: null` matches decodes that try every method. */
@@ -84,7 +86,7 @@ export function createOperationRepository(sql: SQL): OperationRepository {
 
     async findOwned(userId, id) {
       const [row] = await sql<OperationView[]>`
-        SELECT o.*, j.error
+        SELECT o.*, j.error, j.failure_layer
         FROM operations o LEFT JOIN jobs j ON j.operation_id = o.id
         WHERE o.id = ${id} AND o.user_id = ${userId}
       `;
@@ -95,7 +97,7 @@ export function createOperationRepository(sql: SQL): OperationRepository {
       // One extra row tells whether another page exists. cursor_at is the timestamp as UTC text with
       // microseconds, which a JS Date would round.
       const rows = await sql<OperationViewWithCursor[]>`
-        SELECT o.*, j.error,
+        SELECT o.*, j.error, j.failure_layer,
                to_char(o.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_at
         FROM operations o LEFT JOIN jobs j ON j.operation_id = o.id
         WHERE o.user_id = ${userId}
